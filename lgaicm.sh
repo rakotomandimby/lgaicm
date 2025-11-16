@@ -90,10 +90,10 @@ fi
 MODEL="${LGAICM_MODEL:-gpt-5.1-codex-mini}"
 API_URL="${LGAICM_API_URL:-https://api.openai.com/v1/responses}"
 CURL_TIMEOUT=$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-0}" 45)
-MAX_STAT_CHARS=$(parse_positive_int "${LGAICM_MAX_STAT_CHARS:-0}" 6000)
-MAX_DIFF_CHARS=$(parse_positive_int "${LGAICM_MAX_DIFF_CHARS:-0}" 20000)
-SUGGESTION_MIN=$(parse_positive_int "${LGAICM_MIN_SUGGESTIONS:-0}" 3)
-SUGGESTION_MAX=$(parse_positive_int "${LGAICM_MAX_SUGGESTIONS:-0}" 5)
+MAX_STAT_CHARS=$(parse_positive_int "${LGAICM_MAX_STAT_CHARS:-0}" 60000)
+MAX_DIFF_CHARS=$(parse_positive_int "${LGAICM_MAX_DIFF_CHARS:-0}" 200000)
+SUGGESTION_MIN=$(parse_positive_int "${LGAICM_MIN_SUGGESTIONS:-0}" 5)
+SUGGESTION_MAX=$(parse_positive_int "${LGAICM_MAX_SUGGESTIONS:-0}" 7)
 
 if (( SUGGESTION_MIN > SUGGESTION_MAX )); then
   SUGGESTION_MIN="$SUGGESTION_MAX"
@@ -121,8 +121,9 @@ EOF
 PROMPT=$(cat <<EOF
 $TYPE_INSTRUCTION
 Generate between $SUGGESTION_MIN and $SUGGESTION_MAX distinct conventional commit messages.
-Each subject line must: stay under 72 characters, use the imperative mood, avoid trailing punctuation, and describe the staged changes accurately.
+Each subject line must: stay under 120 characters, use the imperative mood, avoid trailing punctuation, and describe the staged changes accurately.
 Return one commit message per line with no bullet markers or numbering.
+Each suggestion must be formatted as: <type>(<scope>): <description>
 
 Staged git diff summary (git diff --cached --stat):
 $TRUNCATED_STAT
