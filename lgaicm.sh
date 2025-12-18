@@ -87,13 +87,14 @@ if git diff --cached --quiet; then
   exit 1
 fi
 
-MODEL="${LGAICM_MODEL:-gpt-5.1-codex-mini}"
+MODEL="${LGAICM_MODEL:-gpt-5.1-codex-max}"
 API_URL="${LGAICM_API_URL:-https://api.openai.com/v1/responses}"
 CURL_TIMEOUT=$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-0}" 45)
 MAX_STAT_CHARS=$(parse_positive_int "${LGAICM_MAX_STAT_CHARS:-0}" 60000)
 MAX_DIFF_CHARS=$(parse_positive_int "${LGAICM_MAX_DIFF_CHARS:-0}" 200000)
 SUGGESTION_MIN=$(parse_positive_int "${LGAICM_MIN_SUGGESTIONS:-0}" 5)
 SUGGESTION_MAX=$(parse_positive_int "${LGAICM_MAX_SUGGESTIONS:-0}" 7)
+MAX_MESSAGE_LENGTH=$(parse_positive_int "${LGAICM_MAX_MESSAGE_LENGTH:-0}" 240)
 
 if (( SUGGESTION_MIN > SUGGESTION_MAX )); then
   SUGGESTION_MIN="$SUGGESTION_MAX"
@@ -121,8 +122,9 @@ EOF
 PROMPT=$(cat <<EOF
 $TYPE_INSTRUCTION
 Generate between $SUGGESTION_MIN and $SUGGESTION_MAX distinct conventional commit messages.
-Each subject line must: stay under 120 characters, use the imperative mood, avoid trailing punctuation, and describe the staged changes accurately.
-Return one commit message per line with no bullet markers or numbering.
+Each subject line must: stay under ${MAX_MESSAGE_LENGTH} characters, use the imperative mood, avoid trailing punctuation, and describe the staged changes accurately.
+There might be multiple atomic changes in the diff; cover as many as possible in one-line commit messages.
+Return one proposition of commit message per line with no bullet markers or numbering.
 Each suggestion must be formatted as: <type>(<scope>): <description>
 
 Staged git diff summary (git diff --cached --stat):
