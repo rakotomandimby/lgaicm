@@ -1,4 +1,5 @@
-#!/usr/bin/env bash
+#!/bin/bash
+
 set -euo pipefail
 
 SCRIPT_NAME=$(basename "$0")
@@ -94,7 +95,7 @@ MAX_STAT_CHARS=$(parse_positive_int "${LGAICM_MAX_STAT_CHARS:-0}" 60000)
 MAX_DIFF_CHARS=$(parse_positive_int "${LGAICM_MAX_DIFF_CHARS:-0}" 200000)
 SUGGESTION_MIN=$(parse_positive_int "${LGAICM_MIN_SUGGESTIONS:-0}" 5)
 SUGGESTION_MAX=$(parse_positive_int "${LGAICM_MAX_SUGGESTIONS:-0}" 7)
-MAX_MESSAGE_LENGTH=$(parse_positive_int "${LGAICM_MAX_MESSAGE_LENGTH:-0}" 240)
+MAX_SUBJECT_LENGTH=$(parse_positive_int "${LGAICM_MAX_SUBJECT_LENGTH:-0}" 50)
 
 if (( SUGGESTION_MIN > SUGGESTION_MAX )); then
   SUGGESTION_MIN="$SUGGESTION_MAX"
@@ -114,18 +115,46 @@ fi
 
 SYSTEM_INSTRUCTIONS=$(cat <<'EOF'
 You are an expert release engineer helping craft precise conventional git commit messages.
-Respond with plain text commit subject lines only.
-Do not include numbering, explanations, or additional prose.
+Respond with properly formatted multi-line commit messages.
+Do not include numbering, explanations, or additional prose beyond the commit messages themselves.
 EOF
 )
 
 PROMPT=$(cat <<EOF
 $TYPE_INSTRUCTION
 Generate between $SUGGESTION_MIN and $SUGGESTION_MAX distinct conventional commit messages.
-Each subject line must: stay under ${MAX_MESSAGE_LENGTH} characters, use the imperative mood, avoid trailing punctuation, and describe the staged changes accurately.
-There might be multiple atomic changes in the diff; cover as many as possible in one-line commit messages.
-Return one proposition of commit message per line with no bullet markers or numbering.
-Each suggestion must be formatted as: <type>(<scope>): <description>
+
+Each commit message MUST follow this exact format:
+1. Subject line: <type>(<scope>): <description> (maximum ${MAX_SUBJECT_LENGTH} characters, imperative mood, no trailing punctuation)
+2. Blank line
+3. Body: Detailed explanation of the changes (wrapped at 72 characters per line)
+
+The body should explain:
+- What changed and why
+- Key implementation details
+- Any breaking changes or important notes
+- Multiple paragraphs are allowed, separated by blank lines
+
+Separate each complete commit message suggestion with a line containing only "---COMMIT---"
+
+There might be multiple atomic changes in the diff; cover as many as possible with distinct commit messages.
+
+Example format:
+feat(auth): add OAuth2 authentication support
+
+Implement OAuth2 authentication flow using the authorization code grant
+type. This allows users to authenticate using third-party providers
+like Google and GitHub.
+
+Changes include:
+- New OAuth2Controller with callback handling
+- Token exchange and validation logic
+- Session management for authenticated users
+- Configuration for multiple OAuth providers
+
+Breaking change: The old JWT-only authentication is now deprecated and
+will be removed in v2.0.0.
+---COMMIT---
 
 Staged git diff summary (git diff --cached --stat):
 $TRUNCATED_STAT
@@ -162,19 +191,57 @@ if [[ -z "$(echo "$RAW_OUTPUT" | tr -d '[:space:]')" ]]; then
   exit 1
 fi
 
-CLEAN_LINES=$(printf '%s\n' "$RAW_OUTPUT" | tr '\r' '\n' | \
-  sed -e 's/^[[:space:]]*//' \
-      -e 's/[[:space:]]*$//' \
-      -e 's/^[0-9][0-9]*[.)-][[:space:]]*//' \
-      -e 's/^[-*][[:space:]]*//' | \
-  awk 'NF { if (!seen[$0]++) print }')
+# Split the output by the separator and process each commit message
+DELIMITER="---COMMIT---"
+COMMIT_MESSAGES=()
+CURRENT_MESSAGE=""
 
-if [[ -z "$CLEAN_LINES" ]]; then
+while IFS= read -r line; do
+  if [[ "$line" == "$DELIMITER" ]]; then
+    if [[ -n "$(echo "$CURRENT_MESSAGE" | tr -d '[:space:]')" ]]; then
+      COMMIT_MESSAGES+=("$CURRENT_MESSAGE")
+    fi
+    CURRENT_MESSAGE=""
+  else
+    if [[ -n "$CURRENT_MESSAGE" ]]; then
+      CURRENT_MESSAGE="$CURRENT_MESSAGE"$'\n'"$line"
+    else
+      CURRENT_MESSAGE="$line"
+    fi
+  fi
+done <<< "$RAW_OUTPUT"
+
+# Add the last message if it exists
+if [[ -n "$(echo "$CURRENT_MESSAGE" | tr -d '[:space:]')" ]]; then
+  COMMIT_MESSAGES+=("$CURRENT_MESSAGE")
+fi
+
+if [[ ${#COMMIT_MESSAGES[@]} -eq 0 ]]; then
   echo "Error: Unable to extract commit suggestions from OpenAI response." >&2
   exit 1
 fi
 
-FINAL_LINES=$(printf '%s\n' "$CLEAN_LINES" | head -n "$SUGGESTION_MAX")
+# Limit to max suggestions and output with separators for LazyGit
+COUNT=0
+for message in "${COMMIT_MESSAGES[@]}"; do
+  if (( COUNT >= SUGGESTION_MAX )); then
+    break
+  fi
+  
+  # Clean up the message (remove leading/trailing whitespace from whole message)
+  CLEAN_MESSAGE=$(echo "$message" | sed -e :a -e '/^\s*$/d;N;/\n$/ba')
+  
+  if [[ -n "$CLEAN_MESSAGE" ]]; then
+    if (( COUNT > 0 )); then
+      echo "---LGAICM-SEPARATOR---"
+    fi
+    echo "$CLEAN_MESSAGE"
+    ((COUNT++))
+  fi
+done
 
-printf '%s\n' "$FINAL_LINES"
+if (( COUNT == 0 )); then
+  echo "Error: No valid commit messages generated." >&2
+  exit 1
+fi
 
