@@ -1,33 +1,57 @@
-#!/bin/bash
-
+#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_NAME=$(basename "$0")
+SCRIPT_NAME="$(basename "$0")"
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
 
 usage() {
-  cat <<EOF
-lgaicm - Generate AI-powered conventional commit suggestions.
+  cat <<'EOF'
+lgaicm - AI-powered conventional commit suggestions (multi-line safe)
 
 Usage:
-  $SCRIPT_NAME [--type <commit-type>] [--help]
+  lgaicm suggest --type <type>
+  lgaicm commit  --file <path>
 
-Options:
-  -t, --type <commit-type>   Conventional commit type to enforce (default: ai-defined).
-  -h, --help                 Show this help message.
+Subcommands:
+
+  suggest
+    Generates commit message suggestions from staged changes and prints lines:
+      <subject> <===> <path-to-message-file>
+
+    Options:
+      -t, --type <type>    Required. One of: feat fix chore docs style refactor perf test ci build
+
+  commit
+    Creates the commit using the selected message file (multi-line),
+    then cleans up the temp suggestion directory (when safe).
+
+    Options:
+      -f, --file <path>    Required. Path returned by the 'suggest' command.
+
+Environment:
+  OPENAI_API_KEY                Required.
+  LGAICM_MODEL                  Default: gpt-5.1-codex-max
+  LGAICM_API_URL                Default: https://api.openai.com/v1/responses
+  LGAICM_CURL_TIMEOUT           Default: 45
+  LGAICM_MAX_STAT_BYTES         Default: 60000
+  LGAICM_MAX_DIFF_BYTES         Default: 200000
+  LGAICM_MIN_SUGGESTIONS        Default: 5
+  LGAICM_MAX_SUGGESTIONS        Default: 7
+  LGAICM_MAX_SUBJECT_LENGTH     Default: 50
 EOF
 }
 
 require_command() {
-  local cmd="$1"
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "Error: Required command '$cmd' is not available in PATH." >&2
-    exit 1
-  fi
+  command -v "$1" >/dev/null 2>&1 || die "Required command '$1' is not available in PATH."
 }
 
 parse_positive_int() {
-  local value="$1"
-  local fallback="$2"
+  local value="${1:-}"
+  local fallback="${2:-}"
   if [[ "$value" =~ ^[0-9]+$ ]] && (( value > 0 )); then
     printf '%s' "$value"
   else
@@ -35,213 +59,291 @@ parse_positive_int() {
   fi
 }
 
-truncate_text() {
+truncate_bytes() {
   local text="$1"
   local limit="$2"
   local length
-  length=$(LC_ALL=C printf '%s' "$text" | wc -c | awk '{print $1}')
+  length="$(LC_ALL=C printf '%s' "$text" | wc -c | awk '{print $1}')"
   if (( length <= limit )); then
     printf '%s' "$text"
   else
-    head -c "$limit" <<<"$text"
-    printf '\n[Diff truncated to %s bytes]\n' "$limit"
+    printf '%s' "$text" | head -c "$limit"
+    printf '\n\n[Truncated to %s bytes]\n' "$limit"
   fi
 }
 
-COMMIT_TYPE="ai-defined"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -t|--type)
-      if [[ -n "${2:-}" ]]; then
-        COMMIT_TYPE="$2"
-        shift 2
-      else
-        echo "Error: --type option requires a value." >&2
-        usage
-        exit 1
-      fi
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Error: Unknown argument '$1'." >&2
-      usage
-      exit 1
-      ;;
+in_allowed_types() {
+  local t="$1"
+  case "$t" in
+    feat|fix|chore|docs|style|refactor|perf|test|ci|build) return 0 ;;
+    *) return 1 ;;
   esac
-done
+}
 
-require_command git
-require_command curl
-require_command jq
+git_require_repo() {
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Not inside a git repository."
+}
 
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  echo "Error: OPENAI_API_KEY environment variable is not set." >&2
-  exit 1
-fi
+git_require_staged_changes() {
+  if git diff --cached --quiet; then
+    die "No staged changes detected. Stage files before generating commit messages."
+  fi
+}
 
-if git diff --cached --quiet; then
-  echo "Error: No staged changes detected. Stage files before generating commit messages." >&2
-  exit 1
-fi
-
-MODEL="${LGAICM_MODEL:-gpt-5.1-codex-max}"
-API_URL="${LGAICM_API_URL:-https://api.openai.com/v1/responses}"
-CURL_TIMEOUT=$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-0}" 45)
-MAX_STAT_CHARS=$(parse_positive_int "${LGAICM_MAX_STAT_CHARS:-0}" 60000)
-MAX_DIFF_CHARS=$(parse_positive_int "${LGAICM_MAX_DIFF_CHARS:-0}" 200000)
-SUGGESTION_MIN=$(parse_positive_int "${LGAICM_MIN_SUGGESTIONS:-0}" 5)
-SUGGESTION_MAX=$(parse_positive_int "${LGAICM_MAX_SUGGESTIONS:-0}" 7)
-MAX_SUBJECT_LENGTH=$(parse_positive_int "${LGAICM_MAX_SUBJECT_LENGTH:-0}" 50)
-
-if (( SUGGESTION_MIN > SUGGESTION_MAX )); then
-  SUGGESTION_MIN="$SUGGESTION_MAX"
-fi
-
-DIFF_STAT=$(git diff --cached --stat)
-DIFF_PATCH=$(git diff --cached)
-
-TRUNCATED_STAT=$(truncate_text "$DIFF_STAT" "$MAX_STAT_CHARS")
-TRUNCATED_PATCH=$(truncate_text "$DIFF_PATCH" "$MAX_DIFF_CHARS")
-
-if [[ "$COMMIT_TYPE" == "ai-defined" ]]; then
-  TYPE_INSTRUCTION="Determine the most appropriate conventional commit type (such as feat, fix, chore, docs, style, refactor, perf, test, build, ci) for each suggestion based on the diff."
-else
-  TYPE_INSTRUCTION="Use the \"$COMMIT_TYPE\" conventional commit type for every suggestion."
-fi
-
-SYSTEM_INSTRUCTIONS=$(cat <<'EOF'
-You are an expert release engineer helping craft precise conventional git commit messages.
-Respond with properly formatted multi-line commit messages.
-Do not include numbering, explanations, or additional prose beyond the commit messages themselves.
-EOF
-)
-
-PROMPT=$(cat <<EOF
-$TYPE_INSTRUCTION
-Generate between $SUGGESTION_MIN and $SUGGESTION_MAX distinct conventional commit messages.
-
-Each commit message MUST follow this exact format:
-1. Subject line: <type>(<scope>): <description> (maximum ${MAX_SUBJECT_LENGTH} characters, imperative mood, no trailing punctuation)
-2. Blank line
-3. Body: Detailed explanation of the changes (wrapped at 72 characters per line)
-
-The body should explain:
-- What changed and why
-- Key implementation details
-- Any breaking changes or important notes
-- Multiple paragraphs are allowed, separated by blank lines
-
-Separate each complete commit message suggestion with a line containing only "---COMMIT---"
-
-There might be multiple atomic changes in the diff; cover as many as possible with distinct commit messages.
-
-Example format:
-feat(auth): add OAuth2 authentication support
-
-Implement OAuth2 authentication flow using the authorization code grant
-type. This allows users to authenticate using third-party providers
-like Google and GitHub.
-
-Changes include:
-- New OAuth2Controller with callback handling
-- Token exchange and validation logic
-- Session management for authenticated users
-- Configuration for multiple OAuth providers
-
-Breaking change: The old JWT-only authentication is now deprecated and
-will be removed in v2.0.0.
----COMMIT---
-
-Staged git diff summary (git diff --cached --stat):
-$TRUNCATED_STAT
-
-Full staged git diff (git diff --cached):
-$TRUNCATED_PATCH
-EOF
-)
-
-REQUEST_PAYLOAD=$(jq -n \
-  --arg model "$MODEL" \
-  --arg instructions "$SYSTEM_INSTRUCTIONS" \
-  --arg input "$PROMPT" \
-  '{model: $model, instructions: $instructions, input: $input}')
-
-if ! API_RESPONSE=$(
-  curl -sS --fail-with-body \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${OPENAI_API_KEY}" \
-    --max-time "$CURL_TIMEOUT" \
-    "$API_URL" \
-    -d "$REQUEST_PAYLOAD"
-); then
-  echo "Error: Failed to call OpenAI Responses API." >&2
-  exit 1
-fi
-
-RAW_OUTPUT=$(echo "$API_RESPONSE" | jq -r '
-  [ .output[]?.content[]? | select(.type == "output_text") | .text ] | join("\n")
-')
-
-if [[ -z "$(echo "$RAW_OUTPUT" | tr -d '[:space:]')" ]]; then
-  echo "Error: OpenAI returned an empty response." >&2
-  exit 1
-fi
-
-# Split the output by the separator and process each commit message
-DELIMITER="---COMMIT---"
-COMMIT_MESSAGES=()
-CURRENT_MESSAGE=""
-
-while IFS= read -r line; do
-  if [[ "$line" == "$DELIMITER" ]]; then
-    if [[ -n "$(echo "$CURRENT_MESSAGE" | tr -d '[:space:]')" ]]; then
-      COMMIT_MESSAGES+=("$CURRENT_MESSAGE")
-    fi
-    CURRENT_MESSAGE=""
-  else
-    if [[ -n "$CURRENT_MESSAGE" ]]; then
-      CURRENT_MESSAGE="$CURRENT_MESSAGE"$'\n'"$line"
+responses_extract_text() {
+  # Reads full JSON API response from stdin and prints best-effort output text.
+  # Prefer Responses API convenience field `.output_text`.
+  jq -r '
+    if (.output_text // empty) != "" then
+      .output_text
     else
-      CURRENT_MESSAGE="$line"
-    fi
+      try ([.output[].content[] | select(.type=="output_text") | .text] | join("\n")) catch ""
+    end
+  '
+}
+
+normalize_subject() {
+  local type="$1"
+  local subject="$2"
+  local maxlen="$3"
+
+  # Normalize CRLF and trim surrounding whitespace
+  subject="$(printf '%s' "$subject" | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+
+  # Force the requested conventional type
+  if [[ "$subject" =~ ^[a-z]+(\([^)]*\))?:[[:space:]] ]]; then
+    subject="$(printf '%s' "$subject" | sed -E "s/^[a-z]+(\([^)]*\))?:/${type}\1:/")"
+  elif [[ "$subject" =~ ^[a-z]+:[[:space:]] ]]; then
+    subject="$(printf '%s' "$subject" | sed -E "s/^[a-z]+:/${type}:/")"
+  elif [[ "$subject" =~ ^${type}(\([^)]*\))?:[[:space:]] ]]; then
+    : # already ok
+  else
+    subject="${type}: ${subject}"
   fi
-done <<< "$RAW_OUTPUT"
 
-# Add the last message if it exists
-if [[ -n "$(echo "$CURRENT_MESSAGE" | tr -d '[:space:]')" ]]; then
-  COMMIT_MESSAGES+=("$CURRENT_MESSAGE")
-fi
+  # Remove trailing period on subject line (conventional style)
+  subject="$(printf '%s' "$subject" | sed -E 's/\.[[:space:]]*$//')"
 
-if [[ ${#COMMIT_MESSAGES[@]} -eq 0 ]]; then
-  echo "Error: Unable to extract commit suggestions from OpenAI response." >&2
-  exit 1
-fi
+  # Enforce max subject length (byte-based; ok for ASCII conventional commits)
+  subject="$(LC_ALL=C printf '%s' "$subject" | head -c "$maxlen")"
+  subject="$(printf '%s' "$subject" | sed -E 's/[[:space:]]+$//')"
 
-# Limit to max suggestions and output with separators for LazyGit
-COUNT=0
-for message in "${COMMIT_MESSAGES[@]}"; do
-  if (( COUNT >= SUGGESTION_MAX )); then
-    break
+  printf '%s' "$subject"
+}
+
+build_prompt() {
+  local type="$1"
+  local min="$2"
+  local max="$3"
+  local max_subject_len="$4"
+  local diff_stat="$5"
+  local diff_patch="$6"
+
+  # Avoid heredocs here to reduce the chance of CRLF/heredoc delimiter issues.
+  printf 'Generate between %s and %s distinct conventional commit message suggestions.\n\n' "$min" "$max"
+
+  printf 'Rules:\n'
+  printf -- '- Use the conventional commit type: "%s" (exactly).\n' "$type"
+  printf -- '- Subject format: %s(scope): description\n' "$type"
+  printf -- '  - scope is optional but preferred when it can be inferred.\n'
+  printf -- '  - imperative mood\n'
+  printf -- '  - no trailing period\n'
+  printf -- '  - max %s characters\n' "$max_subject_len"
+  printf -- '- Body:\n'
+  printf -- '  - explain what changed and why\n'
+  printf -- '  - include notable behavior changes, risks, and tests (if relevant)\n'
+  printf -- '  - wrap text at ~72 characters\n'
+  printf -- '  - can be multiple paragraphs (plain text)\n\n'
+
+  printf 'Return JSON in this exact shape:\n'
+  printf '[\n  { "subject": "…", "body": "…" },\n  ...\n]\n\n'
+
+  printf 'Staged diff summary:\n%s\n\n' "$diff_stat"
+  printf 'Full staged diff:\n%s\n' "$diff_patch"
+}
+
+suggest_cmd() {
+  local TYPE=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -t|--type) TYPE="${2:-}"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "Unknown argument for 'suggest': $1" ;;
+    esac
+  done
+
+  [[ -n "$TYPE" ]] || die "'suggest' requires --type <type>."
+  in_allowed_types "$TYPE" || die "Invalid type '$TYPE'. Allowed: feat fix chore docs style refactor perf test ci build"
+
+  require_command git
+  require_command curl
+  require_command jq
+  require_command mktemp
+
+  [[ -n "${OPENAI_API_KEY:-}" ]] || die "OPENAI_API_KEY environment variable is not set."
+
+  git_require_repo
+  git_require_staged_changes
+
+  local MODEL="${LGAICM_MODEL:-gpt-5.1-codex-max}"
+  local API_URL="${LGAICM_API_URL:-https://api.openai.com/v1/responses}"
+  local CURL_TIMEOUT
+  CURL_TIMEOUT="$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-}" 45)"
+
+  local MAX_STAT_BYTES
+  MAX_STAT_BYTES="$(parse_positive_int "${LGAICM_MAX_STAT_BYTES:-}" 60000)"
+  local MAX_DIFF_BYTES
+  MAX_DIFF_BYTES="$(parse_positive_int "${LGAICM_MAX_DIFF_BYTES:-}" 200000)"
+
+  local SUGGESTION_MIN
+  SUGGESTION_MIN="$(parse_positive_int "${LGAICM_MIN_SUGGESTIONS:-}" 5)"
+  local SUGGESTION_MAX
+  SUGGESTION_MAX="$(parse_positive_int "${LGAICM_MAX_SUGGESTIONS:-}" 7)"
+
+  local MAX_SUBJECT_LENGTH
+  MAX_SUBJECT_LENGTH="$(parse_positive_int "${LGAICM_MAX_SUBJECT_LENGTH:-}" 50)"
+
+  if (( SUGGESTION_MIN > SUGGESTION_MAX )); then
+    SUGGESTION_MIN="$SUGGESTION_MAX"
   fi
-  
-  # Clean up the message (remove leading/trailing whitespace from whole message)
-  CLEAN_MESSAGE=$(echo "$message" | sed -e :a -e '/^\s*$/d;N;/\n$/ba')
-  
-  if [[ -n "$CLEAN_MESSAGE" ]]; then
-    if (( COUNT > 0 )); then
-      echo "---LGAICM-SEPARATOR---"
-    fi
-    echo "$CLEAN_MESSAGE"
-    ((COUNT++))
+
+  local DIFF_STAT DIFF_PATCH
+  DIFF_STAT="$(git diff --cached --stat)"
+  DIFF_PATCH="$(git diff --cached)"
+
+  local TRUNC_STAT TRUNC_PATCH
+  TRUNC_STAT="$(truncate_bytes "$DIFF_STAT" "$MAX_STAT_BYTES")"
+  TRUNC_PATCH="$(truncate_bytes "$DIFF_PATCH" "$MAX_DIFF_BYTES")"
+
+  local SYSTEM_INSTRUCTIONS
+  SYSTEM_INSTRUCTIONS=$'You are an expert release engineer.\nReturn ONLY valid JSON. No markdown. No commentary. No surrounding text.\n'
+
+  local PROMPT
+  PROMPT="$(
+    build_prompt \
+      "$TYPE" \
+      "$SUGGESTION_MIN" \
+      "$SUGGESTION_MAX" \
+      "$MAX_SUBJECT_LENGTH" \
+      "$TRUNC_STAT" \
+      "$TRUNC_PATCH"
+  )"
+
+  local REQUEST_PAYLOAD
+  REQUEST_PAYLOAD="$(jq -n \
+    --arg model "$MODEL" \
+    --arg instructions "$SYSTEM_INSTRUCTIONS" \
+    --arg input "$PROMPT" \
+    '{model: $model, instructions: $instructions, input: $input}')"
+
+  local API_RESPONSE
+  if ! API_RESPONSE="$(
+    curl -sS \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+      --max-time "$CURL_TIMEOUT" \
+      "$API_URL" \
+      -d "$REQUEST_PAYLOAD"
+  )"; then
+    die "Failed to call OpenAI API (network/timeout)."
   fi
-done
 
-if (( COUNT == 0 )); then
-  echo "Error: No valid commit messages generated." >&2
-  exit 1
-fi
+  # Surface API errors clearly
+  if printf '%s' "$API_RESPONSE" | jq -e '.error? != null' >/dev/null 2>&1; then
+    local emsg
+    emsg="$(printf '%s' "$API_RESPONSE" | jq -r '.error.message // .error // "Unknown API error"')"
+    die "OpenAI API error: $emsg"
+  fi
 
+  local RAW_OUTPUT
+  RAW_OUTPUT="$(printf '%s' "$API_RESPONSE" | responses_extract_text)"
+
+  [[ -n "${RAW_OUTPUT//[[:space:]]/}" ]] || die "AI returned empty output."
+
+  # Must be strict JSON array per system prompt
+  if ! printf '%s' "$RAW_OUTPUT" | jq -e 'type=="array"' >/dev/null 2>&1; then
+    echo "AI output was not valid JSON array. Raw output:" >&2
+    printf '%s\n' "$RAW_OUTPUT" >&2
+    exit 1
+  fi
+
+  local count
+  count="$(printf '%s' "$RAW_OUTPUT" | jq 'length')"
+  (( count > 0 )) || die "AI returned zero suggestions."
+
+  # Create a session dir to store multi-line messages (real newlines).
+  local SESSION_DIR
+  SESSION_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lgaicm.XXXXXX")"
+  touch "$SESSION_DIR/.lgaicm_session"
+
+  # Write each suggestion to its own file and print a single-line mapping for LazyGit.
+  local i
+  for (( i=0; i<count; i++ )); do
+    local subject body file
+    subject="$(printf '%s' "$RAW_OUTPUT" | jq -r ".[$i].subject // empty")"
+    body="$(printf '%s' "$RAW_OUTPUT" | jq -r ".[$i].body // empty")"
+
+    subject="$(normalize_subject "$TYPE" "$subject" "$MAX_SUBJECT_LENGTH")"
+    body="$(printf '%s' "$body" | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+
+    [[ -n "${subject//[[:space:]]/}" ]] || continue
+
+    file="$SESSION_DIR/msg-$(printf '%03d' "$((i+1))").txt"
+
+    {
+      printf '%s\n' "$subject"
+      printf '\n'
+      if [[ -n "${body//[[:space:]]/}" ]]; then
+        printf '%s\n' "$body"
+      fi
+    } >"$file"
+
+    # Output format consumed by LazyGit menuFromCommand:
+    # label is subject; value is file path
+    printf '%s <===> %s\n' "$subject" "$file"
+  done
+}
+
+commit_cmd() {
+  local FILE=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f|--file) FILE="${2:-}"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "Unknown argument for 'commit': $1" ;;
+    esac
+  done
+
+  [[ -n "$FILE" ]] || die "'commit' requires --file <path>."
+  [[ -f "$FILE" ]] || die "Commit message file does not exist: $FILE"
+
+  require_command git
+  git_require_repo
+
+  # Create commit using the multi-line message file (subject + blank line + body)
+  # This is equivalent to: git commit -m "<subject>" -m "<body>"
+  git commit -F "$FILE"
+
+  # Cleanup: only delete directories we created (marker file present)
+  local dir
+  dir="$(cd "$(dirname "$FILE")" && pwd -P)"
+  if [[ -f "$dir/.lgaicm_session" ]]; then
+    rm -rf "$dir"
+  fi
+}
+
+main() {
+  if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
+  fi
+
+  case "$1" in
+    suggest) shift; suggest_cmd "$@" ;;
+    commit)  shift; commit_cmd "$@" ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "Unknown subcommand: $1 (use --help)" ;;
+  esac
+}
+
+main "$@"
