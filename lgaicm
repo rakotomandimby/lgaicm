@@ -2,10 +2,31 @@
 set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
+DEBUG_LOG="${LGAICM_DEBUG_LOG:-/tmp/lgaicm_debug.log}"
 
 die() {
   echo "Error: $*" >&2
   exit 1
+}
+
+log_debug() {
+  local timestamp
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  printf '[%s] %s\n' "$timestamp" "$*" >> "$DEBUG_LOG"
+}
+
+log_debug_multiline() {
+  local label="$1"
+  local content="$2"
+  local timestamp
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  {
+    printf '\n========================================\n'
+    printf '[%s] %s\n' "$timestamp" "$label"
+    printf '========================================\n'
+    printf '%s\n' "$content"
+    printf '========================================\n\n'
+  } >> "$DEBUG_LOG"
 }
 
 usage() {
@@ -34,7 +55,7 @@ Subcommands:
 
 Environment:
   OPENAI_API_KEY                Required.
-  LGAICM_MODEL                  Default: gpt-5.1-codex-max
+  LGAICM_MODEL                  Default: gpt-5.1-codex-max 
   LGAICM_API_URL                Default: https://api.openai.com/v1/responses
   LGAICM_CURL_TIMEOUT           Default: 45
   LGAICM_MAX_STAT_BYTES         Default: 60000
@@ -42,6 +63,7 @@ Environment:
   LGAICM_MIN_SUGGESTIONS        Default: 5
   LGAICM_MAX_SUGGESTIONS        Default: 7
   LGAICM_MAX_SUBJECT_LENGTH     Default: 50
+  LGAICM_DEBUG_LOG              Default: /tmp/lgaicm_debug.log
 EOF
 }
 
@@ -90,15 +112,20 @@ git_require_staged_changes() {
   fi
 }
 
+# Extract text from OpenAI Responses API format.
+# The response structure is:
+# {
+#   "output": [
+#     { "type": "reasoning", ... },
+#     { "type": "message", "content": [ { "type": "output_text", "text": "..." } ] }
+#   ]
+# }
+# We need to find the output item with type="message" and extract text from its content array.
 responses_extract_text() {
-  # Reads full JSON API response from stdin and prints best-effort output text.
-  # Prefer Responses API convenience field `.output_text`.
   jq -r '
-    if (.output_text // empty) != "" then
-      .output_text
-    else
-      try ([.output[].content[] | select(.type=="output_text") | .text] | join("\n")) catch ""
-    end
+    # Find all output items that are messages and extract their text content
+    [.output[]? | select(.type == "message") | .content[]? | select(.type == "output_text") | .text]
+    | if length > 0 then join("\n") else empty end
   '
 }
 
@@ -107,24 +134,21 @@ normalize_subject() {
   local subject="$2"
   local maxlen="$3"
 
-  # Normalize CRLF and trim surrounding whitespace
   subject="$(printf '%s' "$subject" | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
 
-  # Force the requested conventional type
-  if [[ "$subject" =~ ^[a-z]+(\([^)]*\))?:[[:space:]] ]]; then
+  local prefix_pattern="^[a-z]+(\([^)]*\))?:[[:space:]]"
+  local simple_pattern="^[a-z]+:[[:space:]]"
+
+  if [[ "$subject" =~ $prefix_pattern ]]; then
     subject="$(printf '%s' "$subject" | sed -E "s/^[a-z]+(\([^)]*\))?:/${type}\1:/")"
-  elif [[ "$subject" =~ ^[a-z]+:[[:space:]] ]]; then
+  elif [[ "$subject" =~ $simple_pattern ]]; then
     subject="$(printf '%s' "$subject" | sed -E "s/^[a-z]+:/${type}:/")"
-  elif [[ "$subject" =~ ^${type}(\([^)]*\))?:[[:space:]] ]]; then
-    : # already ok
   else
     subject="${type}: ${subject}"
   fi
 
-  # Remove trailing period on subject line (conventional style)
   subject="$(printf '%s' "$subject" | sed -E 's/\.[[:space:]]*$//')"
 
-  # Enforce max subject length (byte-based; ok for ASCII conventional commits)
   subject="$(LC_ALL=C printf '%s' "$subject" | head -c "$maxlen")"
   subject="$(printf '%s' "$subject" | sed -E 's/[[:space:]]+$//')"
 
@@ -139,7 +163,6 @@ build_prompt() {
   local diff_stat="$5"
   local diff_patch="$6"
 
-  # Avoid heredocs here to reduce the chance of CRLF/heredoc delimiter issues.
   printf 'Generate between %s and %s distinct conventional commit message suggestions.\n\n' "$min" "$max"
 
   printf 'Rules:\n'
@@ -172,6 +195,9 @@ suggest_cmd() {
     esac
   done
 
+  log_debug "=== Starting suggest command ==="
+  log_debug "Type: $TYPE"
+
   [[ -n "$TYPE" ]] || die "'suggest' requires --type <type>."
   in_allowed_types "$TYPE" || die "Invalid type '$TYPE'. Allowed: feat fix chore docs style refactor perf test ci build"
 
@@ -188,7 +214,11 @@ suggest_cmd() {
   local MODEL="${LGAICM_MODEL:-gpt-5.1-codex-max}"
   local API_URL="${LGAICM_API_URL:-https://api.openai.com/v1/responses}"
   local CURL_TIMEOUT
-  CURL_TIMEOUT="$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-}" 45)"
+  CURL_TIMEOUT="$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-}" 240)"
+
+  log_debug "Model: $MODEL"
+  log_debug "API URL: $API_URL"
+  log_debug "Timeout: $CURL_TIMEOUT"
 
   local MAX_STAT_BYTES
   MAX_STAT_BYTES="$(parse_positive_int "${LGAICM_MAX_STAT_BYTES:-}" 60000)"
@@ -211,6 +241,9 @@ suggest_cmd() {
   DIFF_STAT="$(git diff --cached --stat)"
   DIFF_PATCH="$(git diff --cached)"
 
+  log_debug "Diff stat length: $(printf '%s' "$DIFF_STAT" | wc -c | awk '{print $1}') bytes"
+  log_debug "Diff patch length: $(printf '%s' "$DIFF_PATCH" | wc -c | awk '{print $1}') bytes"
+
   local TRUNC_STAT TRUNC_PATCH
   TRUNC_STAT="$(truncate_bytes "$DIFF_STAT" "$MAX_STAT_BYTES")"
   TRUNC_PATCH="$(truncate_bytes "$DIFF_PATCH" "$MAX_DIFF_BYTES")"
@@ -229,12 +262,17 @@ suggest_cmd() {
       "$TRUNC_PATCH"
   )"
 
+  log_debug_multiline "SYSTEM INSTRUCTIONS" "$SYSTEM_INSTRUCTIONS"
+  log_debug_multiline "USER PROMPT" "$PROMPT"
+
   local REQUEST_PAYLOAD
   REQUEST_PAYLOAD="$(jq -n \
     --arg model "$MODEL" \
     --arg instructions "$SYSTEM_INSTRUCTIONS" \
     --arg input "$PROMPT" \
     '{model: $model, instructions: $instructions, input: $input}')"
+
+  log_debug_multiline "REQUEST PAYLOAD (JSON)" "$REQUEST_PAYLOAD"
 
   local API_RESPONSE
   if ! API_RESPONSE="$(
@@ -245,23 +283,47 @@ suggest_cmd() {
       "$API_URL" \
       -d "$REQUEST_PAYLOAD"
   )"; then
+    log_debug "CURL FAILED"
     die "Failed to call OpenAI API (network/timeout)."
   fi
 
-  # Surface API errors clearly
-  if printf '%s' "$API_RESPONSE" | jq -e '.error? != null' >/dev/null 2>&1; then
+  log_debug_multiline "API RESPONSE (RAW)" "$API_RESPONSE"
+
+  # Check for API-level errors
+  if printf '%s' "$API_RESPONSE" | jq -e '.error != null' >/dev/null 2>&1; then
     local emsg
     emsg="$(printf '%s' "$API_RESPONSE" | jq -r '.error.message // .error // "Unknown API error"')"
+    log_debug "API ERROR: $emsg"
     die "OpenAI API error: $emsg"
+  fi
+
+  # Check response status
+  local response_status
+  response_status="$(printf '%s' "$API_RESPONSE" | jq -r '.status // "unknown"')"
+  log_debug "Response status: $response_status"
+
+  if [[ "$response_status" != "completed" ]]; then
+    local incomplete_reason
+    incomplete_reason="$(printf '%s' "$API_RESPONSE" | jq -r '.incomplete_details // "unknown reason"')"
+    log_debug "Response incomplete: $incomplete_reason"
+    die "API response not completed. Status: $response_status"
   fi
 
   local RAW_OUTPUT
   RAW_OUTPUT="$(printf '%s' "$API_RESPONSE" | responses_extract_text)"
 
-  [[ -n "${RAW_OUTPUT//[[:space:]]/}" ]] || die "AI returned empty output."
+  log_debug_multiline "EXTRACTED OUTPUT" "$RAW_OUTPUT"
 
-  # Must be strict JSON array per system prompt
+  if [[ -z "${RAW_OUTPUT//[[:space:]]/}" ]]; then
+    # Provide more diagnostic info
+    local output_types
+    output_types="$(printf '%s' "$API_RESPONSE" | jq -r '[.output[]?.type] | join(", ")')"
+    log_debug "Output types found: $output_types"
+    die "AI returned empty output. Output types in response: $output_types"
+  fi
+
   if ! printf '%s' "$RAW_OUTPUT" | jq -e 'type=="array"' >/dev/null 2>&1; then
+    log_debug "OUTPUT IS NOT A VALID JSON ARRAY"
     echo "AI output was not valid JSON array. Raw output:" >&2
     printf '%s\n' "$RAW_OUTPUT" >&2
     exit 1
@@ -269,19 +331,21 @@ suggest_cmd() {
 
   local count
   count="$(printf '%s' "$RAW_OUTPUT" | jq 'length')"
+  log_debug "Number of suggestions: $count"
   (( count > 0 )) || die "AI returned zero suggestions."
 
-  # Create a session dir to store multi-line messages (real newlines).
   local SESSION_DIR
   SESSION_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lgaicm.XXXXXX")"
   touch "$SESSION_DIR/.lgaicm_session"
+  log_debug "Session directory: $SESSION_DIR"
 
-  # Write each suggestion to its own file and print a single-line mapping for LazyGit.
   local i
   for (( i=0; i<count; i++ )); do
     local subject body file
     subject="$(printf '%s' "$RAW_OUTPUT" | jq -r ".[$i].subject // empty")"
     body="$(printf '%s' "$RAW_OUTPUT" | jq -r ".[$i].body // empty")"
+
+    log_debug "Processing suggestion $((i+1)): subject='$subject'"
 
     subject="$(normalize_subject "$TYPE" "$subject" "$MAX_SUBJECT_LENGTH")"
     body="$(printf '%s' "$body" | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
@@ -298,10 +362,11 @@ suggest_cmd() {
       fi
     } >"$file"
 
-    # Output format consumed by LazyGit menuFromCommand:
-    # label is subject; value is file path
+    log_debug "Created file: $file"
     printf '%s <===> %s\n' "$subject" "$file"
   done
+
+  log_debug "=== Suggest command completed ==="
 }
 
 commit_cmd() {
@@ -314,22 +379,27 @@ commit_cmd() {
     esac
   done
 
+  log_debug "=== Starting commit command ==="
+  log_debug "File: $FILE"
+
   [[ -n "$FILE" ]] || die "'commit' requires --file <path>."
   [[ -f "$FILE" ]] || die "Commit message file does not exist: $FILE"
 
   require_command git
   git_require_repo
 
-  # Create commit using the multi-line message file (subject + blank line + body)
-  # This is equivalent to: git commit -m "<subject>" -m "<body>"
+  log_debug_multiline "COMMIT MESSAGE CONTENT" "$(cat "$FILE")"
+
   git commit -F "$FILE"
 
-  # Cleanup: only delete directories we created (marker file present)
   local dir
   dir="$(cd "$(dirname "$FILE")" && pwd -P)"
   if [[ -f "$dir/.lgaicm_session" ]]; then
+    log_debug "Cleaning up session directory: $dir"
     rm -rf "$dir"
   fi
+
+  log_debug "=== Commit command completed ==="
 }
 
 main() {
@@ -347,3 +417,4 @@ main() {
 }
 
 main "$@"
+
