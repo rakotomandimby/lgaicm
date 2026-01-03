@@ -112,18 +112,8 @@ git_require_staged_changes() {
   fi
 }
 
-# Extract text from OpenAI Responses API format.
-# The response structure is:
-# {
-#   "output": [
-#     { "type": "reasoning", ... },
-#     { "type": "message", "content": [ { "type": "output_text", "text": "..." } ] }
-#   ]
-# }
-# We need to find the output item with type="message" and extract text from its content array.
 responses_extract_text() {
   jq -r '
-    # Find all output items that are messages and extract their text content
     [.output[]? | select(.type == "message") | .content[]? | select(.type == "output_text") | .text]
     | if length > 0 then join("\n") else empty end
   '
