@@ -12,6 +12,7 @@ AI-powered conventional commit message generator for LazyGit.
 - 🔧 **Highly Configurable**: Customize model, timeouts, message count, and diff limits via environment variables
 - ⚡ **Fast Integration**: Seamlessly integrates with LazyGit's custom commands
 - 🎨 **Multiple Suggestions**: Get 5-7 different commit message options to choose from
+- 📄 **Multi-line Support**: Full support for commit messages with subject and detailed body
 
 ## Prerequisites
 
@@ -34,7 +35,7 @@ cd lgaicm
 ### 2. Make the script executable
 
 ```bash
-chmod +x lgaicm.sh
+chmod +x lgaicm
 ```
 
 ### 3. Add to your PATH
@@ -42,7 +43,7 @@ chmod +x lgaicm.sh
 Create a symbolic link to a directory in your PATH:
 
 ```bash
-ln -s "$(pwd)/lgaicm.sh" /usr/local/bin/lgaicm
+ln -s "$(pwd)/lgaicm" /usr/local/bin/lgaicm
 ```
 
 Or add the script directory to your PATH in your shell configuration file (`~/.bashrc`, `~/.zshrc`, etc.):
@@ -67,17 +68,15 @@ Add the following custom command to your LazyGit configuration file (typically l
 
 ```yaml
 customCommands:
-  - key: <c-a>
-    description: AI-powered conventional commit
-    context: global
+  - key: "<c-a>"
+    description: "AI-powered conventional commit (multiline)"
+    context: "global"
+    loadingText: "Generating commit messages..."
     prompts:
       - type: "menu"
         key: "Type"
         title: "Type of change"
         options:
-          - name: "AI defined"
-            description: "Let AI analyze and determine the best commit type"
-            value: "ai-defined"
           - name: "feat"
             description: "A new feature"
             value: "feat"
@@ -85,24 +84,42 @@ customCommands:
             description: "A bug fix"
             value: "fix"
           - name: "chore"
-            description: "Other changes that don't modify src or test files"
+            description: "Maintenance / tooling / non-user-facing"
             value: "chore"
-          - name: "ci"
-            description: "Changes to CI configuration files and scripts"
-            value: "ci"
+          - name: "docs"
+            description: "Documentation only"
+            value: "docs"
+          - name: "style"
+            description: "Formatting / linting / no behavior change"
+            value: "style"
           - name: "refactor"
-            description: "A code change that neither fixes a bug nor adds a feature"
+            description: "Refactor without behavior change"
             value: "refactor"
+          - name: "perf"
+            description: "Performance improvement"
+            value: "perf"
           - name: "test"
-            description: "Adding missing tests or correcting existing tests"
+            description: "Add or update tests"
             value: "test"
-      - type: menuFromCommand
+          - name: "ci"
+            description: "CI configuration / scripts"
+            value: "ci"
+          - name: "build"
+            description: "Build system / dependencies"
+            value: "build"
+
+      - type: "menuFromCommand"
         title: "AI Generated Commit Messages"
-        key: CommitMsg
-        command: "lgaicm --type {{.Form.Type}}"
-    command: "git commit -m \"{{.Form.CommitMsg}}\""
-    loadingText: "Generating commit messages..."
+        key: "CommitFile"
+        command: "lgaicm suggest --type {{.Form.Type}}"
+        filter: '^(?P<label>.*?) <===> (?P<file>.*)$'
+        valueFormat: '{{.file}}'
+        labelFormat: '{{.label}}'
+
+    command: "lgaicm commit --file {{.Form.CommitFile | quote}}"
 ```
+
+**Note**: If you're using `lgaicm` from a custom location (not in PATH), update the `command` values to use the full path, e.g., `"./lgaicm suggest --type {{.Form.Type}}"` or `"/path/to/lgaicm suggest --type {{.Form.Type}}"`.
 
 ## Usage
 
@@ -110,27 +127,34 @@ customCommands:
 
 1. Stage your changes in LazyGit
 2. Press `Ctrl+A` (or your configured key)
-3. Select the commit type from the menu (or choose "AI defined")
-4. Review the AI-generated commit message suggestions
+3. Select the commit type from the menu
+4. Review the AI-generated commit message suggestions (showing subjects)
 5. Select your preferred message
-6. The commit will be created automatically
+6. The commit will be created automatically with the full message (subject + body)
 
 ### Command Line
 
 You can also use `lgaicm` directly from the command line:
 
 ```bash
-# Let AI determine the commit type
-lgaicm
+# Generate suggestions
+lgaicm suggest --type feat
+lgaicm suggest --type fix
+lgaicm suggest --type chore
 
-# Specify a commit type
-lgaicm --type feat
-lgaicm --type fix
-lgaicm --type chore
+# Create commit from selected message file
+lgaicm commit --file /tmp/lgaicm.XXXXXX/msg-001.txt
 
 # Show help
 lgaicm --help
 ```
+
+The `suggest` subcommand outputs lines in the format:
+```
+<subject> <===> <path-to-message-file>
+```
+
+The `commit` subcommand creates the commit using the selected message file and cleans up temporary files.
 
 **Note**: You must have staged changes before running the command, or it will return an error.
 
@@ -143,7 +167,7 @@ lgaicm --help
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENAI_API_KEY` | *(required)* | Your OpenAI API key |
-| `LGAICM_MODEL` | `gpt-5.1-codex-mini` | OpenAI model to use |
+| `LGAICM_MODEL` | `gpt-5.1-codex-max` | OpenAI model to use |
 | `LGAICM_API_URL` | `https://api.openai.com/v1/responses` | OpenAI API endpoint |
 | `LGAICM_CURL_TIMEOUT` | `45` | API request timeout in seconds |
 
@@ -158,8 +182,9 @@ lgaicm --help
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LGAICM_MAX_STAT_CHARS` | `60000` | Maximum characters from `git diff --stat` |
-| `LGAICM_MAX_DIFF_CHARS` | `200000` | Maximum characters from `git diff` |
+| `LGAICM_MAX_STAT_BYTES` | `60000` | Maximum bytes from `git diff --stat` |
+| `LGAICM_MAX_DIFF_BYTES` | `200000` | Maximum bytes from `git diff` |
+| `LGAICM_MAX_SUBJECT_LENGTH` | `50` | Maximum length for commit subject line |
 
 ### Example Configuration
 
@@ -174,7 +199,8 @@ export LGAICM_MODEL="gpt-4"
 export LGAICM_MIN_SUGGESTIONS="3"
 export LGAICM_MAX_SUGGESTIONS="5"
 export LGAICM_CURL_TIMEOUT="60"
-export LGAICM_MAX_DIFF_CHARS="150000"
+export LGAICM_MAX_DIFF_BYTES="150000"
+export LGAICM_MAX_SUBJECT_LENGTH="50"
 ```
 
 ## Conventional Commit Types
@@ -248,11 +274,19 @@ export LGAICM_MODEL="gpt-4"
 
 ## How It Works
 
+### Suggest Phase
+
 1. **Diff Collection**: The script runs `git diff --cached --stat` and `git diff --cached` to collect your staged changes
-2. **Truncation**: Large diffs are truncated to stay within API limits
-3. **API Request**: The diff is sent to OpenAI's Responses API with instructions to generate conventional commit messages
-4. **Response Processing**: The API response is parsed, cleaned, and formatted
-5. **Output**: Multiple commit message suggestions are returned for selection
+2. **Truncation**: Large diffs are truncated to stay within API limits (configurable byte limits)
+3. **API Request**: The diff is sent to OpenAI's Responses API with instructions to generate conventional commit messages with subjects and bodies
+4. **Response Processing**: The API response is parsed as JSON array of `{subject, body}` objects
+5. **File Creation**: Each suggestion is written to a temporary file in `/tmp/lgaicm.XXXXXX/`
+6. **Output**: Returns lines in format `<subject> <===> <file-path>` for LazyGit menu selection
+
+### Commit Phase
+
+1. **Commit Creation**: The selected message file (containing subject and body) is used with `git commit -F`
+2. **Cleanup**: The temporary session directory is automatically removed after successful commit
 
 ## Contributing
 
