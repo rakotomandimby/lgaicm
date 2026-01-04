@@ -1,8 +1,79 @@
 # `lgaicm` - LazyGit AI Commit Message
 
-AI-powered conventional commit message generator for LazyGit.
+**Generate AI-powered conventional commit messages directly in LazyGit.** Press a hotkey, select a commit type, choose from AI-generated suggestions, and commit—all without leaving LazyGit.
 
-`lgaicm` integrates with [LazyGit](https://github.com/jesseduffield/lazygit) to automatically generate conventional commit messages using OpenAI's API. It analyzes your staged changes and suggests multiple commit messages following the [Conventional Commits](https://www.conventionalcommits.org/) specification.
+## Quick Start
+
+### What You Need
+- [LazyGit](https://github.com/jesseduffield/lazygit) installed
+- OpenAI API key
+- `bash`, `git`, `curl`, and `jq`
+
+### Setup in 3 Steps
+
+**1. Install `lgaicm`:**
+```bash
+git clone https://github.com/rakotomandimby/lgaicm.git
+cd lgaicm
+chmod +x lgaicm
+ln -s "$(pwd)/lgaicm" /usr/local/bin/lgaicm
+```
+
+**2. Set your OpenAI API key:**
+```bash
+export OPENAI_API_KEY="your-openai-api-key-here"
+# Add to ~/.bashrc or ~/.zshrc for persistence
+```
+
+**3. Add to LazyGit config** (`~/.config/lazygit/config.yml`):
+```yaml
+customCommands:
+  - key: "<c-a>"
+    description: "AI-powered conventional commit"
+    context: "global"
+    loadingText: "Generating commit messages..."
+    prompts:
+      - type: "menu"
+        key: "Type"
+        title: "Type of change"
+        options:
+          - name: "feat"
+            description: "A new feature"
+            value: "feat"
+          - name: "fix"
+            description: "A bug fix"
+            value: "fix"
+          - name: "chore"
+            description: "Maintenance / tooling / non-user-facing"
+            value: "chore"
+          - name: "docs"
+            description: "Documentation only"
+            value: "docs"
+          - name: "style"
+            description: "Formatting / linting / no behavior change"
+            value: "style"
+          - name: "refactor"
+            description: "Refactor without behavior change"
+            value: "refactor"
+          - name: "perf"
+            description: "Performance improvement"
+            value: "perf"
+          - name: "test"
+            description: "Add or update tests"
+            value: "test"
+      - type: "menuFromCommand"
+        title: "AI Generated Commit Messages"
+        key: "CommitFile"
+        command: "lgaicm suggest --type {{.Form.Type}}"
+        filter: '^(?P<label>.*?) <===> (?P<file>.*)$'
+        valueFormat: '{{.file}}'
+        labelFormat: '{{.label}}'
+    command: "lgaicm commit --file {{.Form.CommitFile | quote}}"
+```
+
+**That's it!** Stage your changes in LazyGit and press `Ctrl+A` to get AI-generated commit messages.
+
+---
 
 ## Features
 
@@ -14,57 +85,19 @@ AI-powered conventional commit message generator for LazyGit.
 - 🎨 **Multiple Suggestions**: Get 5-7 different commit message options to choose from
 - 📄 **Multi-line Support**: Full support for commit messages with subject and detailed body
 
-## Prerequisites
+## Detailed Installation
 
-- `bash` (version 4.0 or higher recommended)
-- `git`
-- `curl`
-- `jq`
-- [LazyGit](https://github.com/jesseduffield/lazygit)
-- OpenAI API key
+### Alternative PATH Setup
 
-## Installation
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/yourusername/lgaicm.git
-cd lgaicm
-```
-
-### 2. Make the script executable
-
-```bash
-chmod +x lgaicm
-```
-
-### 3. Add to your PATH
-
-Create a symbolic link to a directory in your PATH:
-
-```bash
-ln -s "$(pwd)/lgaicm" /usr/local/bin/lgaicm
-```
-
-Or add the script directory to your PATH in your shell configuration file (`~/.bashrc`, `~/.zshrc`, etc.):
+Instead of a symbolic link, you can add the script directory to your PATH in your shell configuration file (`~/.bashrc`, `~/.zshrc`, etc.):
 
 ```bash
 export PATH="$PATH:/path/to/lgaicm"
 ```
 
-### 4. Set your OpenAI API key
+### Full LazyGit Configuration (with all commit types)
 
-Add your OpenAI API key to your shell configuration:
-
-```bash
-export OPENAI_API_KEY="your-openai-api-key-here"
-```
-
-For persistent configuration, add this to your `~/.bashrc`, `~/.zshrc`, or `~/.profile`.
-
-## LazyGit Configuration
-
-Add the following custom command to your LazyGit configuration file (typically located at `~/.config/lazygit/config.yml` or `~/Library/Application Support/lazygit/config.yml` on macOS):
+The Quick Start shows a simplified config. For all conventional commit types with descriptions, use this in your LazyGit config file (typically `~/.config/lazygit/config.yml` or `~/Library/Application Support/lazygit/config.yml` on macOS):
 
 ```yaml
 customCommands:
@@ -119,18 +152,18 @@ customCommands:
     command: "lgaicm commit --file {{.Form.CommitFile | quote}}"
 ```
 
-**Note**: If you're using `lgaicm` from a custom location (not in PATH), update the `command` values to use the full path, e.g., `"./lgaicm suggest --type {{.Form.Type}}"` or `"/path/to/lgaicm suggest --type {{.Form.Type}}"`.
+**Note**: If `lgaicm` is not in your PATH, update the `command` values to use the full path, e.g., `"/path/to/lgaicm suggest --type {{.Form.Type}}"`.
 
 ## Usage
 
-### Within LazyGit
+### In LazyGit (Recommended)
 
 1. Stage your changes in LazyGit
 2. Press `Ctrl+A` (or your configured key)
 3. Select the commit type from the menu
-4. Review the AI-generated commit message suggestions (showing subjects)
+4. Review AI-generated commit message suggestions
 5. Select your preferred message
-6. The commit will be created automatically with the full message (subject + body)
+6. The commit is created automatically
 
 ### Command Line
 
