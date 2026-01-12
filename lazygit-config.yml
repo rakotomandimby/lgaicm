@@ -42,10 +42,10 @@ customCommands:
       - type: "menuFromCommand"
         title: "AI Generated Commit Messages"
         key: "CommitFile"
-        command: "./lgaicm suggest --type {{.Form.Type}}"
+        command: "lgaicm suggest --type {{.Form.Type}}"
         filter: '^(?P<label>.*?) <===> (?P<file>.*)$'
         valueFormat: '{{.file}}'
         labelFormat: '{{.label}}'
 
-    command: "./lgaicm commit --file {{.Form.CommitFile | quote}}"
+    command: "lgaicm commit --file {{.Form.CommitFile | quote}}"
 

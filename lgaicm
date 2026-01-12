@@ -55,14 +55,14 @@ Subcommands:
 
 Environment:
   OPENAI_API_KEY                Required.
-  LGAICM_MODEL                  Default: gpt-5.1-codex-max 
+  LGAICM_MODEL                  Default: gpt-5.1-codex-mini
   LGAICM_API_URL                Default: https://api.openai.com/v1/responses
   LGAICM_CURL_TIMEOUT           Default: 45
   LGAICM_MAX_STAT_BYTES         Default: 60000
   LGAICM_MAX_DIFF_BYTES         Default: 200000
   LGAICM_MIN_SUGGESTIONS        Default: 5
   LGAICM_MAX_SUGGESTIONS        Default: 7
-  LGAICM_MAX_SUBJECT_LENGTH     Default: 50
+  LGAICM_MAX_SUBJECT_LENGTH     Default: 500
   LGAICM_DEBUG_LOG              Default: /tmp/lgaicm_debug.log
 EOF
 }
@@ -201,7 +201,7 @@ suggest_cmd() {
   git_require_repo
   git_require_staged_changes
 
-  local MODEL="${LGAICM_MODEL:-gpt-5.1-codex-max}"
+  local MODEL="${LGAICM_MODEL:-gpt-5.1-codex-mini}"
   local API_URL="${LGAICM_API_URL:-https://api.openai.com/v1/responses}"
   local CURL_TIMEOUT
   CURL_TIMEOUT="$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-}" 240)"
@@ -221,7 +221,7 @@ suggest_cmd() {
   SUGGESTION_MAX="$(parse_positive_int "${LGAICM_MAX_SUGGESTIONS:-}" 7)"
 
   local MAX_SUBJECT_LENGTH
-  MAX_SUBJECT_LENGTH="$(parse_positive_int "${LGAICM_MAX_SUBJECT_LENGTH:-}" 50)"
+  MAX_SUBJECT_LENGTH="$(parse_positive_int "${LGAICM_MAX_SUBJECT_LENGTH:-}" 500)"
 
   if (( SUGGESTION_MIN > SUGGESTION_MAX )); then
     SUGGESTION_MIN="$SUGGESTION_MAX"
