@@ -54,9 +54,9 @@ Subcommands:
       -f, --file <path>    Required. Path returned by the 'suggest' command.
 
 Environment:
-  OPENAI_API_KEY                Required.
-  LGAICM_MODEL                  Default: gpt-5.1-codex-mini
-  LGAICM_API_URL                Default: https://api.openai.com/v1/responses
+  GOOGLEAI_API_KEY                Required.
+  LGAICM_MODEL                  Default: gemini-3-flash-preview
+  LGAICM_API_URL                Default: https://generativelanguage.googleapis.com/v1beta/interactions
   LGAICM_CURL_TIMEOUT           Default: 45
   LGAICM_MAX_STAT_BYTES         Default: 60000
   LGAICM_MAX_DIFF_BYTES         Default: 200000
@@ -113,9 +113,11 @@ git_require_staged_changes() {
 }
 
 responses_extract_text() {
+  # Gemini Interaction API returns an 'outputs' array.
+  # We filter for items where type is "text" and join them.
   jq -r '
-    [.output[]? | select(.type == "message") | .content[]? | select(.type == "output_text") | .text]
-    | if length > 0 then join("\n") else empty end
+    [.outputs[]? | select(.type == "text") | .text]
+    | if length > 0 then join("") else empty end
   '
 }
 
@@ -200,13 +202,13 @@ suggest_cmd() {
   require_command jq
   require_command mktemp
 
-  [[ -n "${OPENAI_API_KEY:-}" ]] || die "OPENAI_API_KEY environment variable is not set."
+  [[ -n "${GOOGLEAI_API_KEY:-}" ]] || die "GOOGLEAI_API_KEY environment variable is not set."
 
   git_require_repo
   git_require_staged_changes
 
-  local MODEL="${LGAICM_MODEL:-gpt-5.1-codex-mini}"
-  local API_URL="${LGAICM_API_URL:-https://api.openai.com/v1/responses}"
+  local MODEL="${LGAICM_MODEL:-gemini-3-flash-preview}"
+  local API_URL="${LGAICM_API_URL:-https://generativelanguage.googleapis.com/v1beta/interactions}"
   local CURL_TIMEOUT
   CURL_TIMEOUT="$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-}" 240)"
 
@@ -259,47 +261,57 @@ suggest_cmd() {
   log_debug_multiline "SYSTEM INSTRUCTIONS" "$SYSTEM_INSTRUCTIONS"
   log_debug_multiline "USER PROMPT" "$PROMPT"
 
+  # Construct Gemini Interaction API Payload
   local REQUEST_PAYLOAD
   REQUEST_PAYLOAD="$(jq -n \
     --arg model "$MODEL" \
     --arg instructions "$SYSTEM_INSTRUCTIONS" \
     --arg input "$PROMPT" \
-    '{model: $model, instructions: $instructions, input: $input}')"
+    '{
+       model: $model,
+       system_instruction: $instructions,
+       input: [
+         {
+           role: "user",
+           content: $input
+         }
+       ]
+    }')"
 
   log_debug_multiline "REQUEST PAYLOAD (JSON)" "$REQUEST_PAYLOAD"
 
   local API_RESPONSE
   if ! API_RESPONSE="$(
     curl -sS \
+      -X POST \
       -H "Content-Type: application/json" \
-      -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+      -H "x-goog-api-key: ${GOOGLEAI_API_KEY}" \
       --max-time "$CURL_TIMEOUT" \
       "$API_URL" \
       -d "$REQUEST_PAYLOAD"
   )"; then
     log_debug "CURL FAILED"
-    die "Failed to call OpenAI API (network/timeout)."
+    die "Failed to call Gemini API (network/timeout)."
   fi
 
   log_debug_multiline "API RESPONSE (RAW)" "$API_RESPONSE"
 
   # Check for API-level errors
+  # Google APIs typically return { "error": { "code": ..., "message": ... } }
   if printf '%s' "$API_RESPONSE" | jq -e '.error != null' >/dev/null 2>&1; then
     local emsg
     emsg="$(printf '%s' "$API_RESPONSE" | jq -r '.error.message // .error // "Unknown API error"')"
     log_debug "API ERROR: $emsg"
-    die "OpenAI API error: $emsg"
+    die "Gemini API error: $emsg"
   fi
 
-  # Check response status
+  # Check response status if available (Gemini Interaction API includes "status": "completed")
   local response_status
   response_status="$(printf '%s' "$API_RESPONSE" | jq -r '.status // "unknown"')"
   log_debug "Response status: $response_status"
 
-  if [[ "$response_status" != "completed" ]]; then
-    local incomplete_reason
-    incomplete_reason="$(printf '%s' "$API_RESPONSE" | jq -r '.incomplete_details // "unknown reason"')"
-    log_debug "Response incomplete: $incomplete_reason"
+  if [[ "$response_status" != "completed" && "$response_status" != "unknown" ]]; then
+    log_debug "Response not completed. Status: $response_status"
     die "API response not completed. Status: $response_status"
   fi
 
@@ -311,9 +323,16 @@ suggest_cmd() {
   if [[ -z "${RAW_OUTPUT//[[:space:]]/}" ]]; then
     # Provide more diagnostic info
     local output_types
-    output_types="$(printf '%s' "$API_RESPONSE" | jq -r '[.output[]?.type] | join(", ")')"
+    output_types="$(printf '%s' "$API_RESPONSE" | jq -r '[.outputs[]?.type] | join(", ")')"
     log_debug "Output types found: $output_types"
-    die "AI returned empty output. Output types in response: $output_types"
+    die "AI returned empty text output. Output types in response: $output_types"
+  fi
+
+  # Clean up markdown code blocks if the AI wrapped the JSON
+  # Sometimes models wrap JSON in ```json ... ``` despite instructions
+  if [[ "$RAW_OUTPUT" =~ ^[[:space:]]*\`\`\` ]]; then
+      log_debug "Detected markdown code block, stripping..."
+      RAW_OUTPUT="$(printf '%s' "$RAW_OUTPUT" | sed -E 's/^[[:space:]]*```[a-zA-Z]*//; s/```[[:space:]]*$//')"
   fi
 
   if ! printf '%s' "$RAW_OUTPUT" | jq -e 'type=="array"' >/dev/null 2>&1; then
