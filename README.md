@@ -26,50 +26,8 @@ export OPENAI_API_KEY="your-openai-api-key-here"
 ```
 
 **3. Add to LazyGit config** (`~/.config/lazygit/config.yml`):
-```yaml
-customCommands:
-  - key: "<c-a>"
-    description: "AI-powered conventional commit"
-    context: "global"
-    loadingText: "Generating commit messages..."
-    prompts:
-      - type: "menu"
-        key: "Type"
-        title: "Type of change"
-        options:
-          - name: "feat"
-            description: "A new feature"
-            value: "feat"
-          - name: "fix"
-            description: "A bug fix"
-            value: "fix"
-          - name: "chore"
-            description: "Maintenance / tooling / non-user-facing"
-            value: "chore"
-          - name: "docs"
-            description: "Documentation only"
-            value: "docs"
-          - name: "style"
-            description: "Formatting / linting / no behavior change"
-            value: "style"
-          - name: "refactor"
-            description: "Refactor without behavior change"
-            value: "refactor"
-          - name: "perf"
-            description: "Performance improvement"
-            value: "perf"
-          - name: "test"
-            description: "Add or update tests"
-            value: "test"
-      - type: "menuFromCommand"
-        title: "AI Generated Commit Messages"
-        key: "CommitFile"
-        command: "lgaicm suggest --type {{.Form.Type}}"
-        filter: '^(?P<label>.*?) <===> (?P<file>.*)$'
-        valueFormat: '{{.file}}'
-        labelFormat: '{{.label}}'
-    command: "lgaicm commit --file {{.Form.CommitFile | quote}}"
-```
+
+Get the content of [./lazygit-config.yml](./lazygit-config.yml) and append it to your LazyGit config file.
 
 **That's it!** Stage your changes in LazyGit and press `Ctrl+A` to get AI-generated commit messages.
 
