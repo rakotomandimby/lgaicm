@@ -6,7 +6,7 @@
 
 ### What You Need
 - [LazyGit](https://github.com/jesseduffield/lazygit) installed
-- OpenAI API key
+- Google AI API key (for Gemini)
 - `bash`, `git`, `curl`, and `jq`
 
 ### Setup in 3 Steps
@@ -19,9 +19,9 @@ chmod +x lgaicm
 ln -s "$(pwd)/lgaicm" /usr/local/bin/lgaicm
 ```
 
-**2. Set your OpenAI API key:**
+**2. Set your Google AI API key:**
 ```bash
-export OPENAI_API_KEY="your-openai-api-key-here"
+export GOOGLEAI_API_KEY="your-google-ai-api-key-here"
 # Add to ~/.bashrc or ~/.zshrc for persistence
 ```
 
@@ -35,7 +35,7 @@ Get the content of [./lazygit-config.yml](./lazygit-config.yml) and append it to
 
 ## Features
 
-- 🤖 **AI-Powered**: Leverages OpenAI's API to analyze git diffs and generate meaningful commit messages
+- 🤖 **AI-Powered**: Leverages Google Gemini API to analyze git diffs and generate meaningful commit messages
 - 📝 **Conventional Commits**: Generates messages following the conventional commits specification
 - 🎯 **Type Selection**: Choose specific commit types (feat, fix, chore, etc.) or let AI decide
 - 🔧 **Highly Configurable**: Customize model, timeouts, message count, and diff limits via environment variables
@@ -91,9 +91,9 @@ The `commit` subcommand creates the commit using the selected message file and c
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENAI_API_KEY` | *(required)* | Your OpenAI API key |
-| `LGAICM_MODEL` | `gpt-5.1-codex-max` | OpenAI model to use |
-| `LGAICM_API_URL` | `https://api.openai.com/v1/responses` | OpenAI API endpoint |
+| `GOOGLEAI_API_KEY` | *(required)* | Your Google AI API key |
+| `LGAICM_MODEL` | `gemini-3-flash-preview` | Google Gemini model to use |
+| `LGAICM_API_URL` | `https://generativelanguage.googleapis.com/v1beta/interactions` | Google Gemini API endpoint |
 | `LGAICM_CURL_TIMEOUT` | `45` | API request timeout in seconds |
 
 ### Output Configuration
@@ -117,10 +117,10 @@ The `commit` subcommand creates the commit using the selected message file and c
 # ~/.bashrc or ~/.zshrc
 
 # Required
-export OPENAI_API_KEY="sk-proj-..."
+export GOOGLEAI_API_KEY="your-google-ai-api-key"
 
 # Optional customizations
-export LGAICM_MODEL="gpt-4"
+export LGAICM_MODEL="gemini-2-flash-thinking-exp"
 export LGAICM_MIN_SUGGESTIONS="3"
 export LGAICM_MAX_SUGGESTIONS="5"
 export LGAICM_CURL_TIMEOUT="60"
@@ -145,12 +145,12 @@ The tool supports all standard conventional commit types:
 
 ## Troubleshooting
 
-### "OPENAI_API_KEY environment variable is not set"
+### "GOOGLEAI_API_KEY environment variable is not set"
 
-Make sure you've exported your OpenAI API key:
+Make sure you've exported your Google AI API key:
 
 ```bash
-export OPENAI_API_KEY="your-api-key"
+export GOOGLEAI_API_KEY="your-api-key"
 ```
 
 ### "No staged changes detected"
@@ -191,10 +191,10 @@ export LGAICM_CURL_TIMEOUT="90"
 
 ### Empty or invalid responses
 
-Try using a different model:
+Try using a different Gemini model:
 
 ```bash
-export LGAICM_MODEL="gpt-4"
+export LGAICM_MODEL="gemini-2-flash-thinking-exp"
 ```
 
 ## How It Works
@@ -203,7 +203,7 @@ export LGAICM_MODEL="gpt-4"
 
 1. **Diff Collection**: The script runs `git diff --cached --stat` and `git diff --cached` to collect your staged changes
 2. **Truncation**: Large diffs are truncated to stay within API limits (configurable byte limits)
-3. **API Request**: The diff is sent to OpenAI's Responses API with instructions to generate conventional commit messages with subjects and bodies
+3. **API Request**: The diff is sent to Google Gemini API with instructions to generate conventional commit messages with subjects and bodies
 4. **Response Processing**: The API response is parsed as JSON array of `{subject, body}` objects
 5. **File Creation**: Each suggestion is written to a temporary file in `/tmp/lgaicm.XXXXXX/`
 6. **Output**: Returns lines in format `<subject> <===> <file-path>` for LazyGit menu selection
@@ -235,7 +235,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - [LazyGit](https://github.com/jesseduffield/lazygit) - The amazing terminal UI for git
 - [Conventional Commits](https://www.conventionalcommits.org/) - The commit message specification
-- [OpenAI](https://openai.com/) - AI-powered analysis
+- [Google Gemini](https://ai.google.dev/) - AI-powered analysis
 
 ## Related Projects
 
