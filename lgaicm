@@ -245,7 +245,7 @@ suggest_cmd() {
   TRUNC_PATCH="$(truncate_bytes "$DIFF_PATCH" "$MAX_DIFF_BYTES")"
 
   local SYSTEM_INSTRUCTIONS
-  SYSTEM_INSTRUCTIONS=$'You are an expert release engineer.\nReturn ONLY valid JSON. No markdown. No commentary. No surrounding text.\n'
+  SYSTEM_INSTRUCTIONS=$'You are an expert release engineer.\nReturn ONLY valid JSON. No markdown (no triple backthicks). No commentary. No surrounding text.\nAgain, **RETURN ONLY VALID RAW JSON** without surrounding text nor explanations\n'
 
   local PROMPT
   PROMPT="$(
