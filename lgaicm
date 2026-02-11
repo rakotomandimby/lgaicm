@@ -174,8 +174,8 @@ build_prompt() {
   printf -- '  - include code snippets if needed, but indent 4 spaces to make the difference from simple text\n'
   printf -- '  - can be multiple paragraphs, be verbose (plain text)\n\n'
 
-  printf 'Return JSON in this exact shape:\n'
-  printf '[\n  { "subject": "…", "body": "…" },\n  ...\n]\n\n'
+  printf 'Return a valid JSON array in this exact shape:\n'
+  printf '[{ "subject": "…", "body": "…" }, ...]\n\n'
 
   printf 'Staged diff summary:\n%s\n\n' "$diff_stat"
   printf 'Full staged diff:\n%s\n' "$diff_patch"
@@ -245,7 +245,7 @@ suggest_cmd() {
   TRUNC_PATCH="$(truncate_bytes "$DIFF_PATCH" "$MAX_DIFF_BYTES")"
 
   local SYSTEM_INSTRUCTIONS
-  SYSTEM_INSTRUCTIONS=$'You are an expert release engineer.\nReturn ONLY valid JSON. No markdown (no triple backthicks). No commentary. No surrounding text.\nAgain, **RETURN ONLY VALID RAW JSON** without surrounding text nor explanations\n'
+  SYSTEM_INSTRUCTIONS=$'You are an expert release engineer.\nReturn ONLY valid JSON. No markdown (no triple backthicks). No commentary. No surrounding text.\nAgain, **RETURN ONLY a VALID RAW JSON Array** without surrounding text nor explanations\n'
 
   local PROMPT
   PROMPT="$(
