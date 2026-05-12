@@ -55,7 +55,7 @@ Subcommands:
 
 Environment:
   GOOGLEAI_API_KEY                Required.
-  LGAICM_MODEL                  Default: gemini-3.1-flash-lite-preview
+  LGAICM_MODEL                  Default: gemini-3.1-flash-lite
   LGAICM_API_URL                Default: https://generativelanguage.googleapis.com/v1beta/interactions
   LGAICM_CURL_TIMEOUT           Default: 45
   LGAICM_MAX_STAT_BYTES         Default: 60000
@@ -207,7 +207,7 @@ suggest_cmd() {
   git_require_repo
   git_require_staged_changes
 
-  local MODEL="${LGAICM_MODEL:-gemini-3.1-flash-lite-preview}"
+  local MODEL="${LGAICM_MODEL:-gemini-3.1-flash-lite}"
   local API_URL="${LGAICM_API_URL:-https://generativelanguage.googleapis.com/v1beta/interactions}"
   local CURL_TIMEOUT
   CURL_TIMEOUT="$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-}" 240)"
