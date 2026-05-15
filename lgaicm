@@ -113,10 +113,10 @@ git_require_staged_changes() {
 }
 
 responses_extract_text() {
-  # Gemini Interaction API returns a 'steps' array.
-  # We filter for model_output steps and extract text from their content array.
+  # Gemini Interaction API returns an 'outputs' array.
+  # We filter for items where type is "text" and join them.
   jq -r '
-    [.steps[]? | select(.type == "model_output") | .content[]? | .text // empty]
+    [.outputs[]? | select(.type == "text") | .text]
     | if length > 0 then join("") else empty end
   '
 }
@@ -425,4 +425,3 @@ main() {
 }
 
 main "$@"
-
