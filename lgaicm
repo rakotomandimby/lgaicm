@@ -270,12 +270,7 @@ suggest_cmd() {
     '{
        model: $model,
        system_instruction: $instructions,
-       input: [
-         {
-           role: "user",
-           content: $input
-         }
-       ]
+       input: $input
     }')"
 
   log_debug_multiline "REQUEST PAYLOAD (JSON)" "$REQUEST_PAYLOAD"
@@ -322,10 +317,10 @@ suggest_cmd() {
 
   if [[ -z "${RAW_OUTPUT//[[:space:]]/}" ]]; then
     # Provide more diagnostic info
-    local step_types
-    step_types="$(printf '%s' "$API_RESPONSE" | jq -r '[.steps[]?.type] | join(", ")')"
-    log_debug "Step types found: $step_types"
-    die "AI returned empty text output. Step types in response: $step_types"
+    local output_types
+    output_types="$(printf '%s' "$API_RESPONSE" | jq -r '[.steps[]?.type] | join(", ")')"
+    log_debug "Step types found: $output_types"
+    die "AI returned empty text output. Step types in response: $output_types"
   fi
 
   # Clean up markdown code blocks if the AI wrapped the JSON
