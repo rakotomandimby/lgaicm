@@ -113,10 +113,10 @@ git_require_staged_changes() {
 }
 
 responses_extract_text() {
-  # Gemini Interaction API returns an 'outputs' array.
-  # We filter for items where type is "text" and join them.
+  # Gemini Interaction API returns a 'steps' array.
+  # We filter for model_output steps and extract text from their content array.
   jq -r '
-    [.outputs[]? | select(.type == "text") | .text]
+    [.steps[]? | select(.type == "model_output") | .content[]? | .text // empty]
     | if length > 0 then join("") else empty end
   '
 }
@@ -322,10 +322,10 @@ suggest_cmd() {
 
   if [[ -z "${RAW_OUTPUT//[[:space:]]/}" ]]; then
     # Provide more diagnostic info
-    local output_types
-    output_types="$(printf '%s' "$API_RESPONSE" | jq -r '[.outputs[]?.type] | join(", ")')"
-    log_debug "Output types found: $output_types"
-    die "AI returned empty text output. Output types in response: $output_types"
+    local step_types
+    step_types="$(printf '%s' "$API_RESPONSE" | jq -r '[.steps[]?.type] | join(", ")')"
+    log_debug "Step types found: $step_types"
+    die "AI returned empty text output. Step types in response: $step_types"
   fi
 
   # Clean up markdown code blocks if the AI wrapped the JSON
