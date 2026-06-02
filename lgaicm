@@ -113,10 +113,16 @@ git_require_staged_changes() {
 }
 
 responses_extract_text() {
-  # Gemini Interaction API returns an 'outputs' array.
-  # We filter for items where type is "text" and join them.
+  # Extract text from the "model_output" step of the Gemini Interaction API response.
+  # We find the step of type 'model_output', then filter its 'content' array for items of type 'text' and join them.
   jq -r '
-    [.outputs[]? | select(.type == "text") | .text]
+    [
+      .steps[]?
+      | select(.type == "model_output")
+      | .content[]?
+      | select(.type == "text")
+      | .text
+    ]
     | if length > 0 then join("") else empty end
   '
 }
@@ -280,6 +286,7 @@ suggest_cmd() {
     curl -sS \
       -X POST \
       -H "Content-Type: application/json" \
+      -H "Api-Revision: 2026-05-20" \
       -H "x-goog-api-key: ${GOOGLEAI_API_KEY}" \
       --max-time "$CURL_TIMEOUT" \
       "$API_URL" \
@@ -425,3 +432,4 @@ main() {
 }
 
 main "$@"
+
