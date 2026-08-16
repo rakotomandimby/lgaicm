@@ -55,15 +55,24 @@ Subcommands:
 
 Environment:
   GOOGLEAI_API_KEY                Required.
-  LGAICM_MODEL                  Default: gemini-3.5-flash-lite
-  LGAICM_API_URL                Default: https://generativelanguage.googleapis.com/v1beta/interactions
-  LGAICM_CURL_TIMEOUT           Default: 45
-  LGAICM_MAX_STAT_BYTES         Default: 60000
-  LGAICM_MAX_DIFF_BYTES         Default: 200000
-  LGAICM_MIN_SUGGESTIONS        Default: 5
-  LGAICM_MAX_SUGGESTIONS        Default: 7
-  LGAICM_MAX_SUBJECT_LENGTH     Default: 500
-  LGAICM_DEBUG_LOG              Default: /tmp/lgaicm_debug.log
+  LGAICM_MODEL                    Default: gemini-3.5-flash-lite
+  LGAICM_API_URL                  Default:
+                                  https://aiplatform.googleapis.com/v1/publishers/google/models
+                                  This is treated as the BASE Vertex AI endpoint. lgaicm always
+                                  appends "/<model>:generateContent" itself, e.g.:
+                                    <LGAICM_API_URL>/<LGAICM_MODEL>:generateContent
+                                  For backward compatibility, a literal "{model}" (or "{MODEL}")
+                                  placeholder anywhere in LGAICM_API_URL is still supported and
+                                  will be substituted with the model id. If LGAICM_API_URL already
+                                  contains ":generateContent", it is used as-is (model assumed to
+                                  be already baked in).
+  LGAICM_CURL_TIMEOUT             Default: 45
+  LGAICM_MAX_STAT_BYTES           Default: 60000
+  LGAICM_MAX_DIFF_BYTES           Default: 200000
+  LGAICM_MIN_SUGGESTIONS          Default: 5
+  LGAICM_MAX_SUGGESTIONS          Default: 7
+  LGAICM_MAX_SUBJECT_LENGTH       Default: 500
+  LGAICM_DEBUG_LOG                Default: /tmp/lgaicm_debug.log
 EOF
 }
 
@@ -112,19 +121,79 @@ git_require_staged_changes() {
   fi
 }
 
-responses_extract_text() {
-  # Extract text from the "model_output" step of the Gemini Interaction API response.
-  # We find the step of type 'model_output', then filter its 'content' array for items of type 'text' and join them.
+generate_content_extract_text() {
+  # Extract generated text from candidate 0 parts, filtering out thoughts
   jq -r '
     [
-      .steps[]?
-      | select(.type == "model_output")
-      | .content[]?
-      | select(.type == "text")
+      .candidates[0]?.content?.parts[]?
+      | select((.thought? != true) and (.text? != null))
       | .text
     ]
-    | if length > 0 then join("") else empty end
+    | if length > 0 then join("")
+      else [
+        .candidates[0]?.content?.parts[]?
+        | select(.text? != null)
+        | .text
+      ] | if length > 0 then join("") else empty end
+      end
   '
+}
+
+build_generate_content_url() {
+  local api_url="$1"
+  local model="$2"
+  local api_key="$3"
+  local endpoint encoded_api_key separator model_segment
+
+  [[ -n "$model" ]] || die "LGAICM_MODEL must not be empty."
+  [[ -n "$api_url" ]] || die "LGAICM_API_URL must not be empty."
+
+  if [[ "$api_url" == *"{model}"* ]]; then
+    # Legacy templating style: "{model}" placeholder anywhere in the URL.
+    endpoint="${api_url//"{model}"/$model}"
+  elif [[ "$api_url" == *"{MODEL}"* ]]; then
+    # Legacy templating style: "{MODEL}" placeholder anywhere in the URL.
+    endpoint="${api_url//"{MODEL}"/$model}"
+  elif [[ "$api_url" == *":generateContent"* ]]; then
+    # The caller already fully qualified the endpoint (model baked in).
+    endpoint="$api_url"
+  else
+    # Default/recommended style: LGAICM_API_URL is the BASE Vertex AI
+    # "publishers/google/models" URL, and we append the model id and the
+    # method ourselves, exactly like:
+    #   https://aiplatform.googleapis.com/v1/publishers/google/models/${MODEL_ID}:generateContent
+    endpoint="${api_url%/}/${model}:generateContent"
+  fi
+
+  [[ "$endpoint" != *"{model}"* && "$endpoint" != *"{MODEL}"* ]] || die \
+    "LGAICM_API_URL contains an unresolved {model} placeholder."
+
+  [[ "$endpoint" == *":generateContent"* ]] || die \
+    "LGAICM_API_URL must target a Vertex AI generateContent endpoint."
+
+  # Defend against a misconfigured LGAICM_API_URL that resolves to the
+  # literal word "model" as the model id segment (for example a stray
+  # "/models/model:generateContent" left over from an old/legacy config
+  # that lost its "{model}" placeholder braces). Sending that request to
+  # Vertex AI fails with a confusing "Publisher model ... was not found"
+  # error, so fail fast here instead with an actionable message.
+  model_segment="${endpoint##*/models/}"
+  model_segment="${model_segment%%:generateContent*}"
+  if [[ "$model_segment" == "model" && "$model" != "model" ]]; then
+    die "LGAICM_API_URL resolved to '.../models/model:generateContent' instead of '.../models/${model}:generateContent'. Check LGAICM_API_URL for a stray '{model}' placeholder that lost its braces, or unset it to use the default."
+  fi
+
+  log_debug "Resolved generateContent endpoint (no key): $endpoint"
+
+  encoded_api_key="$(jq -nr --arg value "$api_key" '$value | @uri')"
+
+  if [[ "$endpoint" == *"?"* ]]; then
+    separator="&"
+  else
+    separator="?"
+  fi
+
+  printf '%s%skey=%s' "$endpoint" "$separator" "$encoded_api_key"
 }
 
 normalize_subject() {
@@ -214,12 +283,12 @@ suggest_cmd() {
   git_require_staged_changes
 
   local MODEL="${LGAICM_MODEL:-gemini-3.5-flash-lite}"
-  local API_URL="${LGAICM_API_URL:-https://generativelanguage.googleapis.com/v1beta/interactions}"
+  local API_URL="${LGAICM_API_URL:-https://aiplatform.googleapis.com/v1/publishers/google/models}"
   local CURL_TIMEOUT
-  CURL_TIMEOUT="$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-}" 240)"
+  CURL_TIMEOUT="$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-}" 45)"
 
   log_debug "Model: $MODEL"
-  log_debug "API URL: $API_URL"
+  log_debug "API URL (base or template): $API_URL"
   log_debug "Timeout: $CURL_TIMEOUT"
 
   local MAX_STAT_BYTES
@@ -251,7 +320,7 @@ suggest_cmd() {
   TRUNC_PATCH="$(truncate_bytes "$DIFF_PATCH" "$MAX_DIFF_BYTES")"
 
   local SYSTEM_INSTRUCTIONS
-  SYSTEM_INSTRUCTIONS=$'You are an expert release engineer.\nReturn ONLY valid JSON. No markdown (no triple backthicks). No commentary. No surrounding text.\nAgain, **RETURN ONLY a VALID RAW JSON Array** without surrounding text nor explanations\n'
+  SYSTEM_INSTRUCTIONS=$'You are an expert release engineer.\nReturn ONLY valid JSON. No markdown (no triple backticks). No commentary. No surrounding text.\nAgain, RETURN ONLY a VALID RAW JSON array without surrounding text or explanations.\n'
 
   local PROMPT
   PROMPT="$(
@@ -267,85 +336,119 @@ suggest_cmd() {
   log_debug_multiline "SYSTEM INSTRUCTIONS" "$SYSTEM_INSTRUCTIONS"
   log_debug_multiline "USER PROMPT" "$PROMPT"
 
-  # Construct Gemini Interaction API Payload
+  # Construct a Vertex AI generateContent request body with JSON response config.
   local REQUEST_PAYLOAD
   REQUEST_PAYLOAD="$(jq -n \
-    --arg model "$MODEL" \
     --arg instructions "$SYSTEM_INSTRUCTIONS" \
     --arg input "$PROMPT" \
     '{
-       model: $model,
-       system_instruction: $instructions,
-       input: $input
+      systemInstruction: {
+        parts: [
+          {
+            text: $instructions
+          }
+        ]
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: $input
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        responseMimeType: "application/json"
+      }
     }')"
 
   log_debug_multiline "REQUEST PAYLOAD (JSON)" "$REQUEST_PAYLOAD"
+
+  local GENERATE_CONTENT_URL
+  GENERATE_CONTENT_URL="$(build_generate_content_url "$API_URL" "$MODEL" "$GOOGLEAI_API_KEY")"
+  log_debug "GenerateContent endpoint: ${GENERATE_CONTENT_URL%%\?*}?key=[REDACTED]"
 
   local API_RESPONSE
   if ! API_RESPONSE="$(
     curl -sS \
       -X POST \
       -H "Content-Type: application/json" \
-      -H "Api-Revision: 2026-05-20" \
-      -H "x-goog-api-key: ${GOOGLEAI_API_KEY}" \
       --max-time "$CURL_TIMEOUT" \
-      "$API_URL" \
+      "$GENERATE_CONTENT_URL" \
       -d "$REQUEST_PAYLOAD"
   )"; then
     log_debug "CURL FAILED"
-    die "Failed to call Gemini API (network/timeout)."
+    die "Failed to call Gemini generateContent API (network/timeout)."
   fi
 
   log_debug_multiline "API RESPONSE (RAW)" "$API_RESPONSE"
 
-  # Check for API-level errors
-  # Google APIs typically return { "error": { "code": ..., "message": ... } }
-  if printf '%s' "$API_RESPONSE" | jq -e '.error != null' >/dev/null 2>&1; then
-    local emsg
-    emsg="$(printf '%s' "$API_RESPONSE" | jq -r '.error.message // .error // "Unknown API error"')"
-    log_debug "API ERROR: $emsg"
-    die "Gemini API error: $emsg"
+  if ! printf '%s' "$API_RESPONSE" | jq -e . >/dev/null 2>&1; then
+    log_debug "API RESPONSE IS NOT VALID JSON"
+    echo "Raw API response:" >&2
+    printf '%s\n' "$API_RESPONSE" >&2
+    die "Gemini generateContent API returned an invalid JSON response."
   fi
 
-  # Check response status if available (Gemini Interaction API includes "status": "completed")
-  local response_status
-  response_status="$(printf '%s' "$API_RESPONSE" | jq -r '.status // "unknown"')"
-  log_debug "Response status: $response_status"
-
-  if [[ "$response_status" != "completed" && "$response_status" != "unknown" ]]; then
-    log_debug "Response not completed. Status: $response_status"
-    die "API response not completed. Status: $response_status"
+  # Google APIs return API failures as:
+  # { "error": { "code": ..., "message": ..., "status": ... } }
+  if printf '%s' "$API_RESPONSE" | jq -e '.error != null' >/dev/null 2>&1; then
+    local emsg
+    emsg="$(printf '%s' "$API_RESPONSE" | jq -r '.error.message // .error.status // "Unknown API error"')"
+    log_debug "API ERROR: $emsg"
+    die "Gemini generateContent API error: $emsg"
   fi
 
   local RAW_OUTPUT
-  RAW_OUTPUT="$(printf '%s' "$API_RESPONSE" | responses_extract_text)"
+  RAW_OUTPUT="$(printf '%s' "$API_RESPONSE" | generate_content_extract_text)"
 
   log_debug_multiline "EXTRACTED OUTPUT" "$RAW_OUTPUT"
 
   if [[ -z "${RAW_OUTPUT//[[:space:]]/}" ]]; then
-    # Provide more diagnostic info
-    local output_types
-    output_types="$(printf '%s' "$API_RESPONSE" | jq -r '[.steps[]?.type] | join(", ")')"
-    log_debug "Step types found: $output_types"
-    die "AI returned empty text output. Step types in response: $output_types"
+    local finish_reasons
+    local prompt_block_reason
+    finish_reasons="$(printf '%s' "$API_RESPONSE" | jq -r '[.candidates[]?.finishReason // empty] | join(", ")')"
+    prompt_block_reason="$(printf '%s' "$API_RESPONSE" | jq -r '.promptFeedback.blockReason // empty')"
+
+    log_debug "Candidate finish reasons: $finish_reasons"
+    log_debug "Prompt block reason: $prompt_block_reason"
+
+    if [[ -n "$prompt_block_reason" ]]; then
+      die "Gemini blocked the request. Reason: $prompt_block_reason"
+    fi
+
+    if [[ -n "$finish_reasons" ]]; then
+      die "Gemini returned no text output. Candidate finish reason(s): $finish_reasons"
+    fi
+
+    die "Gemini returned no generated text candidates."
   fi
 
-  # Clean up markdown code blocks if the AI wrapped the JSON
-  # Sometimes models wrap JSON in ```json ... ``` despite instructions
+  # Strip markdown code blocks if the model wrapped the JSON
   if [[ "$RAW_OUTPUT" =~ ^[[:space:]]*\`\`\` ]]; then
-      log_debug "Detected markdown code block, stripping..."
-      RAW_OUTPUT="$(printf '%s' "$RAW_OUTPUT" | sed -E 's/^[[:space:]]*```[a-zA-Z]*//; s/```[[:space:]]*$//')"
+    log_debug "Detected markdown code block, stripping..."
+    RAW_OUTPUT="$(printf '%s' "$RAW_OUTPUT" | sed -E '1{/^[[:space:]]*```/d}; ${/^[[:space:]]*```/d}')"
   fi
 
-  if ! printf '%s' "$RAW_OUTPUT" | jq -e 'type=="array"' >/dev/null 2>&1; then
+  local PARSED_JSON
+  if ! PARSED_JSON="$(printf '%s' "$RAW_OUTPUT" | jq -e '
+    if type == "array" then .
+    elif type == "object" then (
+      .suggestions // .commits // .messages // .data // ([.[] | select(type == "array")][0]) // empty
+    )
+    else empty
+    end
+  ' 2>/dev/null)"; then
     log_debug "OUTPUT IS NOT A VALID JSON ARRAY"
-    echo "AI output was not valid JSON array. Raw output:" >&2
+    echo "AI output was not a valid JSON array. Raw output:" >&2
     printf '%s\n' "$RAW_OUTPUT" >&2
     exit 1
   fi
 
   local count
-  count="$(printf '%s' "$RAW_OUTPUT" | jq 'length')"
+  count="$(printf '%s' "$PARSED_JSON" | jq 'length')"
   log_debug "Number of suggestions: $count"
   (( count > 0 )) || die "AI returned zero suggestions."
 
@@ -357,17 +460,17 @@ suggest_cmd() {
   local i
   for (( i=0; i<count; i++ )); do
     local subject body file
-    subject="$(printf '%s' "$RAW_OUTPUT" | jq -r ".[$i].subject // empty")"
-    body="$(printf '%s' "$RAW_OUTPUT" | jq -r ".[$i].body // empty")"
+    subject="$(printf '%s' "$PARSED_JSON" | jq -r ".[$i].subject // empty")"
+    body="$(printf '%s' "$PARSED_JSON" | jq -r ".[$i].body // empty")"
 
-    log_debug "Processing suggestion $((i+1)): subject='$subject'"
+    log_debug "Processing suggestion $((i + 1)): subject='$subject'"
 
     subject="$(normalize_subject "$TYPE" "$subject" "$MAX_SUBJECT_LENGTH")"
     body="$(printf '%s' "$body" | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
 
     [[ -n "${subject//[[:space:]]/}" ]] || continue
 
-    file="$SESSION_DIR/msg-$(printf '%03d' "$((i+1))").txt"
+    file="$SESSION_DIR/msg-$(printf '%03d' "$((i + 1))").txt"
 
     {
       printf '%s\n' "$subject"
@@ -375,7 +478,7 @@ suggest_cmd() {
       if [[ -n "${body//[[:space:]]/}" ]]; then
         printf '%s\n' "$body"
       fi
-    } >"$file"
+    } > "$file"
 
     log_debug "Created file: $file"
     printf '%s <===> %s\n' "$subject" "$file"
@@ -425,7 +528,7 @@ main() {
 
   case "$1" in
     suggest) shift; suggest_cmd "$@" ;;
-    commit)  shift; commit_cmd "$@" ;;
+    commit) shift; commit_cmd "$@" ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown subcommand: $1 (use --help)" ;;
   esac
