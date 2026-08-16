@@ -92,8 +92,8 @@ The `commit` subcommand creates the commit using the selected message file and c
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GOOGLEAI_API_KEY` | *(required)* | Your Google AI API key |
-| `LGAICM_MODEL` | `gemini-3-flash-preview` | Google Gemini model to use |
-| `LGAICM_API_URL` | `https://generativelanguage.googleapis.com/v1beta/interactions` | Google Gemini API endpoint |
+| `LGAICM_MODEL` | `gemini-3.5-flash-lite` | Google Gemini model to use |
+| `LGAICM_API_URL` | `https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent` | Vertex AI Gemini generateContent API endpoint |
 | `LGAICM_CURL_TIMEOUT` | `45` | API request timeout in seconds |
 
 ### Output Configuration
@@ -109,7 +109,7 @@ The `commit` subcommand creates the commit using the selected message file and c
 |----------|---------|-------------|
 | `LGAICM_MAX_STAT_BYTES` | `60000` | Maximum bytes from `git diff --stat` |
 | `LGAICM_MAX_DIFF_BYTES` | `200000` | Maximum bytes from `git diff` |
-| `LGAICM_MAX_SUBJECT_LENGTH` | `50` | Maximum length for commit subject line |
+| `LGAICM_MAX_SUBJECT_LENGTH` | `500` | Maximum length for commit subject line |
 
 ### Example Configuration
 
@@ -120,12 +120,12 @@ The `commit` subcommand creates the commit using the selected message file and c
 export GOOGLEAI_API_KEY="your-google-ai-api-key"
 
 # Optional customizations
-export LGAICM_MODEL="gemini-2-flash-thinking-exp"
+export LGAICM_MODEL="gemini-3.5-flash-lite"
 export LGAICM_MIN_SUGGESTIONS="3"
 export LGAICM_MAX_SUGGESTIONS="5"
 export LGAICM_CURL_TIMEOUT="60"
 export LGAICM_MAX_DIFF_BYTES="150000"
-export LGAICM_MAX_SUBJECT_LENGTH="50"
+export LGAICM_MAX_SUBJECT_LENGTH="500"
 ```
 
 ## Conventional Commit Types
@@ -194,7 +194,7 @@ export LGAICM_CURL_TIMEOUT="90"
 Try using a different Gemini model:
 
 ```bash
-export LGAICM_MODEL="gemini-2-flash-thinking-exp"
+export LGAICM_MODEL="gemini-3.5-flash-lite"
 ```
 
 ## How It Works
@@ -203,7 +203,7 @@ export LGAICM_MODEL="gemini-2-flash-thinking-exp"
 
 1. **Diff Collection**: The script runs `git diff --cached --stat` and `git diff --cached` to collect your staged changes
 2. **Truncation**: Large diffs are truncated to stay within API limits (configurable byte limits)
-3. **API Request**: The diff is sent to Google Gemini API with instructions to generate conventional commit messages with subjects and bodies
+3. **API Request**: The diff is sent to Google Gemini Vertex AI generateContent API with instructions to generate conventional commit messages with subjects and bodies
 4. **Response Processing**: The API response is parsed as JSON array of `{subject, body}` objects
 5. **File Creation**: Each suggestion is written to a temporary file in `/tmp/lgaicm.XXXXXX/`
 6. **Output**: Returns lines in format `<subject> <===> <file-path>` for LazyGit menu selection
@@ -246,3 +246,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ---
 
 Made with ❤️ for developers who love clean commit histories
+
