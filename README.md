@@ -7,7 +7,7 @@
 ### What You Need
 - [LazyGit](https://github.com/jesseduffield/lazygit) installed
 - Google AI API key (for Gemini)
-- `bash`, `git`, `curl`, and `jq`
+- `bash`, `git`, `curl`, `jq`, and `mktemp` (standard in `coreutils`)
 
 ### Setup in 3 Steps
 
@@ -27,89 +27,91 @@ export GOOGLEAI_API_KEY="your-google-ai-api-key-here"
 
 **3. Add to LazyGit config** (`~/.config/lazygit/config.yml`):
 
-Get the content of [./lazygit-config.yml](./lazygit-config.yml) and append it to your LazyGit config file.
+Copy the content of [./lazygit-config.yml](./lazygit-config.yml) and append it to your LazyGit configuration file.
 
-**That's it!** Stage your changes in LazyGit and press `Ctrl+A` to get AI-generated commit messages.
+**That's it!** Stage your changes in LazyGit and press `Ctrl+A` to generate and select AI-powered commit messages.
 
 ---
 
 ## Features
 
-- 🤖 **AI-Powered**: Leverages Google Gemini API to analyze git diffs and generate meaningful commit messages
-- 📝 **Conventional Commits**: Generates messages following the conventional commits specification
-- 🎯 **Type Selection**: Choose specific commit types (feat, fix, chore, etc.) or let AI decide
-- 🔧 **Highly Configurable**: Customize model, timeouts, message count, and diff limits via environment variables
-- ⚡ **Fast Integration**: Seamlessly integrates with LazyGit's custom commands
-- 🎨 **Multiple Suggestions**: Get 5-7 different commit message options to choose from
-- 📄 **Multi-line Support**: Full support for commit messages with subject and detailed body
+- 🤖 **AI-Powered**: Leverages Google Gemini models to analyze git diff stats and patches to generate meaningful commit messages.
+- 📝 **Conventional Commits**: Enforces conventional commit formatting with mandatory type prefixing and scope inference.
+- 🎯 **Type Selection**: Choose from allowed conventional commit types (`feat`, `fix`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`, `ci`, `build`).
+- 🔧 **Highly Configurable**: Customize model, endpoint URL, timeouts, suggestion counts, diff truncation limits, subject length, and debug logs via environment variables.
+- ⚡ **Fast Integration**: Seamlessly integrates with LazyGit's `customCommands` and `menuFromCommand`.
+- 🎨 **Multiple Suggestions**: Generates a configurable number of distinct commit message options (default 5–7).
+- 📄 **Multi-line Safe**: Produces comprehensive commit messages with subject lines and detailed multi-line bodies covering changes, risks, and regression testing tips.
 
-## Detailed Installation
-
+---
 
 ## Usage
 
 ### In LazyGit (Recommended)
 
-1. Stage your changes in LazyGit
-2. Press `Ctrl+A` (or your configured key)
-3. Select the commit type from the menu
-4. Review AI-generated commit message suggestions
-5. Select your preferred message
-6. The commit is created automatically
+1. Stage your changes in LazyGit (`space` on modified files).
+2. Press `Ctrl+A` (or your configured keybinding).
+3. Select the commit type from the prompt menu.
+4. Review the AI-generated commit message suggestions in the submenu.
+5. Select your preferred message to commit automatically.
 
 ### Command Line
 
-You can also use `lgaicm` directly from the command line:
+You can also run `lgaicm` directly from your terminal:
 
 ```bash
-# Generate suggestions
+# Generate suggestions (requires staged changes)
 lgaicm suggest --type feat
-lgaicm suggest --type fix
-lgaicm suggest --type chore
+lgaicm suggest -t fix
 
-# Create commit from selected message file
+# Commit using a selected suggestion file
 lgaicm commit --file /tmp/lgaicm.XXXXXX/msg-001.txt
+lgaicm commit -f /tmp/lgaicm.XXXXXX/msg-001.txt
 
-# Show help
+# Show usage and available options
 lgaicm --help
 ```
 
-The `suggest` subcommand outputs lines in the format:
-```
+The `suggest` subcommand outputs lines in the delimiter format expected by LazyGit:
+```text
 <subject> <===> <path-to-message-file>
 ```
 
-The `commit` subcommand creates the commit using the selected message file and cleans up temporary files.
+The `commit` subcommand creates the commit using `git commit -F <path>` and cleans up the temporary session directory.
 
-**Note**: You must have staged changes before running the command, or it will return an error.
+---
 
 ## Configuration
 
-`lgaicm` can be customized using environment variables. Add these to your shell configuration file for persistent settings:
+`lgaicm` is configured via environment variables. You can set them in your shell configuration file (`~/.bashrc`, `~/.zshrc`, etc.):
 
 ### API Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GOOGLEAI_API_KEY` | *(required)* | Your Google AI API key |
-| `LGAICM_MODEL` | `gemini-3.5-flash-lite` | Google Gemini model to use |
-| `LGAICM_API_URL` | `https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent` | Vertex AI Gemini generateContent API endpoint |
+| `LGAICM_MODEL` | `gemini-3.5-flash-lite` | Gemini model name |
+| `LGAICM_API_URL` | `https://aiplatform.googleapis.com/v1/publishers/google/models` | Base Vertex AI endpoint or generateContent endpoint URL (see URL resolution rules below) |
 | `LGAICM_CURL_TIMEOUT` | `45` | API request timeout in seconds |
 
-### Output Configuration
+#### Endpoint URL Resolution Rules
+
+`lgaicm` resolves `LGAICM_API_URL` using the following rules:
+
+1. **Default / Base URL**: Treated as the base Vertex AI endpoint (`https://aiplatform.googleapis.com/v1/publishers/google/models`). `lgaicm` automatically appends `/<LGAICM_MODEL>:generateContent`.
+2. **Template Substitution**: Any `{model}` or `{MODEL}` placeholder in `LGAICM_API_URL` is substituted with the value of `LGAICM_MODEL`.
+3. **Explicit Endpoint**: If `LGAICM_API_URL` already contains `:generateContent`, it is used directly as-is without appending model paths.
+
+### Output & Diff Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LGAICM_MIN_SUGGESTIONS` | `5` | Minimum number of commit messages to generate |
-| `LGAICM_MAX_SUGGESTIONS` | `7` | Maximum number of commit messages to generate |
-
-### Diff Limits
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LGAICM_MAX_STAT_BYTES` | `60000` | Maximum bytes from `git diff --stat` |
-| `LGAICM_MAX_DIFF_BYTES` | `200000` | Maximum bytes from `git diff` |
-| `LGAICM_MAX_SUBJECT_LENGTH` | `500` | Maximum length for commit subject line |
+| `LGAICM_MIN_SUGGESTIONS` | `5` | Minimum number of commit message suggestions to request |
+| `LGAICM_MAX_SUGGESTIONS` | `7` | Maximum number of commit message suggestions to request |
+| `LGAICM_MAX_SUBJECT_LENGTH` | `500` | Maximum character length for normalized commit subject lines |
+| `LGAICM_MAX_STAT_BYTES` | `60000` | Maximum byte limit for `git diff --cached --stat` before truncation |
+| `LGAICM_MAX_DIFF_BYTES` | `200000` | Maximum byte limit for `git diff --cached` patch before truncation |
+| `LGAICM_DEBUG_LOG` | `/tmp/lgaicm_debug.log` | Target file path for detailed debug logging |
 
 ### Example Configuration
 
@@ -121,103 +123,107 @@ export GOOGLEAI_API_KEY="your-google-ai-api-key"
 
 # Optional customizations
 export LGAICM_MODEL="gemini-3.5-flash-lite"
+export LGAICM_API_URL="https://aiplatform.googleapis.com/v1/publishers/google/models"
 export LGAICM_MIN_SUGGESTIONS="3"
 export LGAICM_MAX_SUGGESTIONS="5"
 export LGAICM_CURL_TIMEOUT="60"
-export LGAICM_MAX_DIFF_BYTES="150000"
-export LGAICM_MAX_SUBJECT_LENGTH="500"
+export LGAICM_MAX_STAT_BYTES="60000"
+export LGAICM_MAX_DIFF_BYTES="200000"
+export LGAICM_MAX_SUBJECT_LENGTH="100"
+export LGAICM_DEBUG_LOG="/tmp/lgaicm_debug.log"
 ```
+
+---
 
 ## Conventional Commit Types
 
-The tool supports all standard conventional commit types:
+The script strictly validates and accepts the following commit types:
 
-- **feat**: A new feature
-- **fix**: A bug fix
-- **docs**: Documentation only changes
-- **style**: Changes that do not affect the meaning of the code
-- **refactor**: A code change that neither fixes a bug nor adds a feature
-- **perf**: A code change that improves performance
-- **test**: Adding missing tests or correcting existing tests
-- **build**: Changes that affect the build system or external dependencies
-- **ci**: Changes to CI configuration files and scripts
-- **chore**: Other changes that don't modify src or test files
+| Type | Description |
+|------|-------------|
+| `feat` | A new feature |
+| `fix` | A bug fix |
+| `chore` | Maintenance, tooling, or non-user-facing changes |
+| `docs` | Documentation only changes |
+| `style` | Formatting, missing semi-colons, whitespace, etc. (no code behavior change) |
+| `refactor` | Code restructuring without fixing a bug or adding a feature |
+| `perf` | Performance improvement changes |
+| `test` | Adding or updating tests |
+| `ci` | CI/CD configuration files and scripts |
+| `build` | Build system or external dependencies changes |
 
-## Troubleshooting
-
-### "GOOGLEAI_API_KEY environment variable is not set"
-
-Make sure you've exported your Google AI API key:
-
-```bash
-export GOOGLEAI_API_KEY="your-api-key"
-```
-
-### "No staged changes detected"
-
-You need to stage files before generating commit messages:
-
-```bash
-git add <files>
-```
-
-In LazyGit, select files and press `space` to stage them.
-
-### "Required command 'jq' is not available"
-
-Install `jq`:
-
-```bash
-# macOS
-brew install jq
-
-# Ubuntu/Debian
-sudo apt-get install jq
-
-# Fedora
-sudo dnf install jq
-
-# Arch Linux
-sudo pacman -S jq
-```
-
-### API timeout errors
-
-Increase the timeout value:
-
-```bash
-export LGAICM_CURL_TIMEOUT="90"
-```
-
-### Empty or invalid responses
-
-Try using a different Gemini model:
-
-```bash
-export LGAICM_MODEL="gemini-3.5-flash-lite"
-```
+---
 
 ## How It Works
 
-### Suggest Phase
+### Suggest Phase (`lgaicm suggest --type <type>`)
 
-1. **Diff Collection**: The script runs `git diff --cached --stat` and `git diff --cached` to collect your staged changes
-2. **Truncation**: Large diffs are truncated to stay within API limits (configurable byte limits)
-3. **API Request**: The diff is sent to Google Gemini Vertex AI generateContent API with instructions to generate conventional commit messages with subjects and bodies
-4. **Response Processing**: The API response is parsed as JSON array of `{subject, body}` objects
-5. **File Creation**: Each suggestion is written to a temporary file in `/tmp/lgaicm.XXXXXX/`
-6. **Output**: Returns lines in format `<subject> <===> <file-path>` for LazyGit menu selection
+1. **Prerequisite Verification**: Checks for `git`, `curl`, `jq`, `mktemp`, a valid git repository, staged changes, and `GOOGLEAI_API_KEY`.
+2. **Diff Collection & Safety Truncation**: Extracts `git diff --cached --stat` and `git diff --cached`, truncating them safely according to `LGAICM_MAX_STAT_BYTES` and `LGAICM_MAX_DIFF_BYTES`.
+3. **Structured Prompt Generation**: Builds a prompt enforcing JSON output (`[{ "subject": "...", "body": "..." }]`), conventional commit rules, subject line wrapping, and multi-paragraph commit bodies covering what changed, why, behavior changes, risks, and regression testing steps.
+4. **API Request**: Calls the Gemini `generateContent` endpoint using `curl` with `responseMimeType: "application/json"`.
+5. **JSON Extraction & Subject Normalization**: Extracts candidate text, parses the JSON array, ensures the type prefix is present, strips trailing periods, and trims whitespace.
+6. **Temporary File Storage**: Writes each message to an isolated temporary session folder (`/tmp/lgaicm.XXXXXX/msg-XXX.txt`) and emits `<subject> <===> <path>` lines for LazyGit.
 
-### Commit Phase
+### Commit Phase (`lgaicm commit --file <path>`)
 
-1. **Commit Creation**: The selected message file (containing subject and body) is used with `git commit -F`
-2. **Cleanup**: The temporary session directory is automatically removed after successful commit
+1. **Commit Execution**: Reads the full multi-line commit message from the file using `git commit -F <file>`.
+2. **Session Cleanup**: Identifies the parent session directory via the `.lgaicm_session` marker and removes the temporary directory upon completion.
+
+---
+
+## Troubleshooting & Debugging
+
+### Debug Logs
+
+`lgaicm` writes comprehensive debug information—including API request payloads, raw API responses, candidate finish reasons, and session paths—to `LGAICM_DEBUG_LOG` (defaults to `/tmp/lgaicm_debug.log`).
+
+You can inspect the log in real time with:
+```bash
+tail -f /tmp/lgaicm_debug.log
+```
+
+### Common Errors
+
+- **`Error: GOOGLEAI_API_KEY environment variable is not set.`**  
+  Export your API key before launching LazyGit or running `lgaicm`:
+  ```bash
+  export GOOGLEAI_API_KEY="your-api-key"
+  ```
+
+- **`Error: No staged changes detected. Stage files before generating commit messages.`**  
+  Stage the intended changes with `git add <files>` (or press `space` in LazyGit) before executing the suggest command.
+
+- **`Error: Not inside a git repository.`**  
+  Ensure you are executing the command within a valid Git working tree.
+
+- **`Error: Required command 'jq' is not available in PATH.`**  
+  Install missing dependencies (`git`, `curl`, `jq`):
+  ```bash
+  # macOS
+  brew install jq
+
+  # Debian / Ubuntu
+  sudo apt-get install jq
+
+  # Fedora
+  sudo dnf install jq
+
+  # Arch Linux
+  sudo pacman -S jq
+  ```
+
+- **API timeout errors / `Failed to call Gemini generateContent API (network/timeout)`**  
+  Increase the curl timeout:
+  ```bash
+  export LGAICM_CURL_TIMEOUT="90"
+  ```
+
+---
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-### Development
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
@@ -227,23 +233,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 6. Push to the branch (`git push origin feature/amazing-feature`)
 7. Open a Pull Request
 
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- [LazyGit](https://github.com/jesseduffield/lazygit) - The amazing terminal UI for git
-- [Conventional Commits](https://www.conventionalcommits.org/) - The commit message specification
-- [Google Gemini](https://ai.google.dev/) - AI-powered analysis
-
-## Related Projects
-
-- [LazyGit](https://github.com/jesseduffield/lazygit)
-- [commitizen](https://github.com/commitizen/cz-cli)
-- [conventional-changelog](https://github.com/conventional-changelog/conventional-changelog)
-
 ---
 
-Made with ❤️ for developers who love clean commit histories
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
