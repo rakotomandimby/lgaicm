@@ -56,7 +56,7 @@ Subcommands:
 
 Environment:
   GOOGLEAI_API_KEY                Required.
-  LGAICM_MODEL                    Default: gemini-4-hydrogen
+  LGAICM_MODEL                    Default: gemini-3.5-flash-lite
   LGAICM_API_URL                  Default:
                                   https://aiplatform.googleapis.com/v1/publishers/google/models
                                   This is treated as the BASE Vertex AI endpoint. lgaicm always
@@ -414,7 +414,7 @@ suggest_cmd() {
   git_require_repo
   git_require_staged_changes
 
-  local MODEL="${LGAICM_MODEL:-gemini-4-hydrogen}"
+  local MODEL="${LGAICM_MODEL:-gemini-3.5-flash-lite}"
   local API_URL="${LGAICM_API_URL:-https://aiplatform.googleapis.com/v1/publishers/google/models}"
   local CURL_TIMEOUT
   CURL_TIMEOUT="$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-}" 45)"
