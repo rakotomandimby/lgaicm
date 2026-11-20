@@ -56,15 +56,16 @@ Subcommands:
 
 Environment:
   GOOGLEAI_API_KEY                Required.
-  LGAICM_MODEL                    Default: gemini-3.5-flash-lite
+  GOOGLEAI_PROJECT_ID             Required.
+  LGAICM_MODEL                    Default: gemini-4-hydrogen
   LGAICM_API_URL                  Default:
-                                  https://aiplatform.googleapis.com/v1/publishers/google/models
+                                  https://aiplatform.googleapis.com/v1/projects/<GOOGLEAI_PROJECT_ID>/locations/global/publishers/google/models
                                   This is treated as the BASE Vertex AI endpoint. lgaicm always
                                   appends "/<model>:generateContent" itself, e.g.:
                                     <LGAICM_API_URL>/<LGAICM_MODEL>:generateContent
                                   For backward compatibility, a literal "{model}" (or "{MODEL}")
-                                  placeholder anywhere in LGAICM_API_URL is still supported and
-                                  will be substituted with the model id. If LGAICM_API_URL already
+                                  and "{project}" (or "{PROJECT_ID}") placeholder anywhere in
+                                  LGAICM_API_URL is supported and will be substituted. If LGAICM_API_URL already
                                   contains ":generateContent", it is used as-is (model assumed to
                                   be already baked in).
   LGAICM_CURL_TIMEOUT             Default: 45
@@ -139,37 +140,38 @@ generate_content_extract_text() {
 }
 
 build_generate_content_url() {
-  local api_url="$1" model="$2" api_key="$3"
-  local endpoint encoded_api_key separator
+  local api_url="$1" model="$2" project_id="$3"
+  local endpoint
 
   [[ -n "$model" ]] || die "LGAICM_MODEL must not be empty."
   [[ -n "$api_url" ]] || die "LGAICM_API_URL must not be empty."
+  [[ -n "$project_id" ]] || die "GOOGLEAI_PROJECT_ID must not be empty."
 
   # Backward-compatible templating: substitute a "{model}"/"{MODEL}"
-  # placeholder anywhere in the URL with the configured model id.
+  # or "{project}"/"{PROJECT_ID}" placeholder anywhere in the URL.
   endpoint="${api_url//\{model\}/$model}"
   endpoint="${endpoint//\{MODEL\}/$model}"
+  endpoint="${endpoint//\{project\}/$project_id}"
+  endpoint="${endpoint//\{PROJECT_ID\}/$project_id}"
 
   [[ "$endpoint" != *"{model}"* && "$endpoint" != *"{MODEL}"* ]] || die \
     "LGAICM_API_URL contains an unresolved {model} placeholder."
+  [[ "$endpoint" != *"{project}"* && "$endpoint" != *"{PROJECT_ID}"* ]] || die \
+    "LGAICM_API_URL contains an unresolved {project} placeholder."
 
   # No placeholder was used: treat LGAICM_API_URL as the BASE Vertex AI
   # "publishers/google/models" URL and append the model + method,
   # unless it is already a fully qualified generateContent endpoint.
-  if [[ "$endpoint" == "$api_url" && "$endpoint" != *":generateContent"* ]]; then
+  if [[ "$endpoint" != *":generateContent"* ]]; then
     endpoint="${endpoint%/}/${model}:generateContent"
   fi
 
   [[ "$endpoint" == *":generateContent"* ]] || die \
     "LGAICM_API_URL must target a Vertex AI generateContent endpoint."
 
-  log_debug "Resolved generateContent endpoint (no key): $endpoint"
+  log_debug "Resolved generateContent endpoint: $endpoint"
 
-  encoded_api_key="$(jq -nr --arg value "$api_key" '$value | @uri')"
-  separator="?"
-  [[ "$endpoint" == *"?"* ]] && separator="&"
-
-  printf '%s%skey=%s' "$endpoint" "$separator" "$encoded_api_key"
+  printf '%s' "$endpoint"
 }
 
 normalize_subject() {
@@ -230,7 +232,7 @@ build_prompt() {
 }
 
 call_gemini_api() {
-  local api_url="$1" model="$2" timeout="$3" prompt="$4"
+  local api_url="$1" model="$2" timeout="$3" prompt="$4" project_id="$5"
 
   local system_instructions
   system_instructions=$'You are an expert release engineer.\nReturn ONLY valid JSON. No markdown (no triple backticks). No commentary. No surrounding text.\nAgain, RETURN ONLY a VALID RAW JSON array without surrounding text or explanations.\n'
@@ -264,14 +266,15 @@ call_gemini_api() {
   log_debug_multiline "REQUEST PAYLOAD (JSON)" "$payload"
 
   local url
-  url="$(build_generate_content_url "$api_url" "$model" "$GOOGLEAI_API_KEY")"
-  log_debug "GenerateContent endpoint: ${url%%\?*}?key=[REDACTED]"
+  url="$(build_generate_content_url "$api_url" "$model" "$project_id")"
+  log_debug "GenerateContent endpoint: $url (x-goog-api-key: [REDACTED])"
 
   local response
   if ! response="$(
     curl -sS \
       -X POST \
       -H "Content-Type: application/json" \
+      -H "x-goog-api-key: ${GOOGLEAI_API_KEY}" \
       --max-time "$timeout" \
       "$url" \
       -d "$payload"
@@ -410,16 +413,19 @@ suggest_cmd() {
   require_command git curl jq mktemp
 
   [[ -n "${GOOGLEAI_API_KEY:-}" ]] || die "GOOGLEAI_API_KEY environment variable is not set."
+  [[ -n "${GOOGLEAI_PROJECT_ID:-}" ]] || die "GOOGLEAI_PROJECT_ID environment variable is not set."
 
   git_require_repo
   git_require_staged_changes
 
-  local MODEL="${LGAICM_MODEL:-gemini-3.5-flash-lite}"
-  local API_URL="${LGAICM_API_URL:-https://aiplatform.googleapis.com/v1/publishers/google/models}"
+  local PROJECT_ID="$GOOGLEAI_PROJECT_ID"
+  local MODEL="${LGAICM_MODEL:-gemini-4-hydrogen}"
+  local API_URL="${LGAICM_API_URL:-https://aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/global/publishers/google/models}"
   local CURL_TIMEOUT
   CURL_TIMEOUT="$(parse_positive_int "${LGAICM_CURL_TIMEOUT:-}" 45)"
 
   log_debug "Model: $MODEL"
+  log_debug "Project ID: $PROJECT_ID"
   log_debug "API URL (base or template): $API_URL"
   log_debug "Timeout: $CURL_TIMEOUT"
 
@@ -462,7 +468,7 @@ suggest_cmd() {
   )"
 
   local RAW_OUTPUT
-  RAW_OUTPUT="$(call_gemini_api "$API_URL" "$MODEL" "$CURL_TIMEOUT" "$PROMPT")"
+  RAW_OUTPUT="$(call_gemini_api "$API_URL" "$MODEL" "$CURL_TIMEOUT" "$PROMPT" "$PROJECT_ID")"
 
   local PARSED_JSON
   PARSED_JSON="$(parse_suggestions_json "$RAW_OUTPUT")"

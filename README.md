@@ -6,7 +6,7 @@
 
 ### What You Need
 - [LazyGit](https://github.com/jesseduffield/lazygit) installed
-- Google AI API key (for Gemini)
+- Google AI API key and Google Cloud Project ID (for Gemini)
 - `bash`, `git`, `curl`, `jq`, and `mktemp` (standard in `coreutils`)
 
 ### Setup in 3 Steps
@@ -19,9 +19,10 @@ chmod +x lgaicm
 ln -s "$(pwd)/lgaicm" /usr/local/bin/lgaicm
 ```
 
-**2. Set your Google AI API key:**
+**2. Set your Google AI API key and Project ID:**
 ```bash
 export GOOGLEAI_API_KEY="your-google-ai-api-key-here"
+export GOOGLEAI_PROJECT_ID="your-google-cloud-project-id"
 # Add to ~/.bashrc or ~/.zshrc for persistence
 ```
 
@@ -89,17 +90,18 @@ The `commit` subcommand creates the commit using `git commit -F <path>` and clea
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GOOGLEAI_API_KEY` | *(required)* | Your Google AI API key |
-| `LGAICM_MODEL` | `gemini-3.5-flash-lite` | Gemini model name |
-| `LGAICM_API_URL` | `https://aiplatform.googleapis.com/v1/publishers/google/models` | Base Vertex AI endpoint or generateContent endpoint URL (see URL resolution rules below) |
+| `GOOGLEAI_API_KEY` | *(required)* | Your Google AI API key (sent via `x-goog-api-key` header) |
+| `GOOGLEAI_PROJECT_ID` | *(required)* | Your Google Cloud Project ID for project-scoped Vertex AI access |
+| `LGAICM_MODEL` | `gemini-4-hydrogen` | Gemini model name |
+| `LGAICM_API_URL` | `https://aiplatform.googleapis.com/v1/projects/<GOOGLEAI_PROJECT_ID>/locations/global/publishers/google/models` | Base Vertex AI endpoint or generateContent endpoint URL (see URL resolution rules below) |
 | `LGAICM_CURL_TIMEOUT` | `45` | API request timeout in seconds |
 
 #### Endpoint URL Resolution Rules
 
 `lgaicm` resolves `LGAICM_API_URL` using the following rules:
 
-1. **Default / Base URL**: Treated as the base Vertex AI endpoint (`https://aiplatform.googleapis.com/v1/publishers/google/models`). `lgaicm` automatically appends `/<LGAICM_MODEL>:generateContent`.
-2. **Template Substitution**: Any `{model}` or `{MODEL}` placeholder in `LGAICM_API_URL` is substituted with the value of `LGAICM_MODEL`.
+1. **Default / Base URL**: Treated as the base project-scoped Vertex AI endpoint (`https://aiplatform.googleapis.com/v1/projects/<GOOGLEAI_PROJECT_ID>/locations/global/publishers/google/models`). `lgaicm` automatically appends `/<LGAICM_MODEL>:generateContent`.
+2. **Template Substitution**: Any `{model}` / `{MODEL}` or `{project}` / `{PROJECT_ID}` placeholder in `LGAICM_API_URL` is substituted with the value of `LGAICM_MODEL` and `GOOGLEAI_PROJECT_ID`.
 3. **Explicit Endpoint**: If `LGAICM_API_URL` already contains `:generateContent`, it is used directly as-is without appending model paths.
 
 ### Output & Diff Configuration
@@ -120,10 +122,11 @@ The `commit` subcommand creates the commit using `git commit -F <path>` and clea
 
 # Required
 export GOOGLEAI_API_KEY="your-google-ai-api-key"
+export GOOGLEAI_PROJECT_ID="your-google-cloud-project-id"
 
 # Optional customizations
-export LGAICM_MODEL="gemini-3.5-flash-lite"
-export LGAICM_API_URL="https://aiplatform.googleapis.com/v1/publishers/google/models"
+export LGAICM_MODEL="gemini-4-hydrogen"
+export LGAICM_API_URL="https://aiplatform.googleapis.com/v1/projects/${GOOGLEAI_PROJECT_ID}/locations/global/publishers/google/models"
 export LGAICM_MIN_SUGGESTIONS="3"
 export LGAICM_MAX_SUGGESTIONS="5"
 export LGAICM_CURL_TIMEOUT="60"
@@ -158,7 +161,7 @@ The script strictly validates and accepts the following commit types:
 
 ### Suggest Phase (`lgaicm suggest --type <type>`)
 
-1. **Prerequisite Verification**: Checks for `git`, `curl`, `jq`, `mktemp`, a valid git repository, staged changes, and `GOOGLEAI_API_KEY`.
+1. **Prerequisite Verification**: Checks for `git`, `curl`, `jq`, `mktemp`, a valid git repository, staged changes, `GOOGLEAI_API_KEY`, and `GOOGLEAI_PROJECT_ID`.
 2. **Diff Collection & Safety Truncation**: Extracts `git diff --cached --stat` and `git diff --cached`, truncating them safely according to `LGAICM_MAX_STAT_BYTES` and `LGAICM_MAX_DIFF_BYTES`.
 3. **Structured Prompt Generation**: Builds a prompt enforcing JSON output (`[{ "subject": "...", "body": "..." }]`), conventional commit rules, subject line wrapping, and multi-paragraph commit bodies covering what changed, why, behavior changes, risks, and regression testing steps.
 4. **API Request**: Calls the Gemini `generateContent` endpoint using `curl` with `responseMimeType: "application/json"`.
@@ -189,6 +192,12 @@ tail -f /tmp/lgaicm_debug.log
   Export your API key before launching LazyGit or running `lgaicm`:
   ```bash
   export GOOGLEAI_API_KEY="your-api-key"
+  ```
+
+- **`Error: GOOGLEAI_PROJECT_ID environment variable is not set.`**  
+  Export your Google Cloud Project ID before launching LazyGit or running `lgaicm`:
+  ```bash
+  export GOOGLEAI_PROJECT_ID="your-project-id"
   ```
 
 - **`Error: No staged changes detected. Stage files before generating commit messages.`**  
